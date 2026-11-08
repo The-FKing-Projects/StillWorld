@@ -27,7 +27,9 @@ The expected public scheme is HTTPS by default, including behind a TLS
 terminating proxy; `STILLWORLD_INSECURE_COOKIES=true` switches it to HTTP for
 local development only. When using `STILLWORLD_BEHIND_PROXY=true`, restrict
 direct access to the application and ensure the trusted proxy sets the
-rightmost `X-Forwarded-For` value.
+rightmost `X-Forwarded-For` value. The proxy must also preserve the public
+`Host` header, including any port; the origin check does not use
+`X-Forwarded-Host`.
 
 ## Clean-room development
 

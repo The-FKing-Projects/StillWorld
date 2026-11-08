@@ -334,6 +334,8 @@ func TestLimiterConcurrentAdmissions(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	var allowed atomic.Int32
+	release := make(chan struct{})
+	attempted := make(chan struct{}, 100)
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
@@ -341,14 +343,58 @@ func TestLimiterConcurrentAdmissions(t *testing.T) {
 			<-start
 			if e := l.reserve("same"); e != nil {
 				allowed.Add(1)
+				attempted <- struct{}{}
+				<-release
 				l.finish(e, true, false)
+			} else {
+				attempted <- struct{}{}
 			}
 		}()
 	}
 	close(start)
-	wg.Wait()
+	for i := 0; i < 100; i++ {
+		<-attempted
+	}
 	if got := allowed.Load(); got != 10 {
-		t.Fatalf("admitted %d requests, want 10", got)
+		t.Errorf("admitted %d requests, want 10", got)
+	}
+	close(release)
+	wg.Wait()
+}
+
+func TestLimiterExpiryOrderAndCapacity(t *testing.T) {
+	now := time.Now()
+	l := newLimiter(1, time.Hour, func() time.Time { return now })
+	l.maxKeys = 3
+	for _, k := range []string{"a", "b", "c"} {
+		e := l.reserve(k)
+		if e == nil {
+			t.Fatalf("reserve %s", k)
+		}
+		l.finish(e, true, false)
+		now = now.Add(time.Minute)
+	}
+	if l.reserve("new") != nil {
+		t.Fatal("full limiter should reject new keys")
+	}
+	now = now.Add(57 * time.Minute)
+	e := l.reserve("new")
+	if e == nil {
+		t.Fatal("earliest expired entry should free a slot")
+	}
+	l.finish(e, true, false)
+	if len(l.entries) != 3 || len(l.expirations) != 3 {
+		t.Fatalf("entry/heap sizes: %d/%d, want 3/3", len(l.entries), len(l.expirations))
+	}
+	// Replacing an expired existing key works even when the map is full.
+	now = now.Add(time.Minute)
+	e = l.reserve("b")
+	if e == nil {
+		t.Fatal("expired existing key should be renewed")
+	}
+	l.finish(e, true, false)
+	if len(l.entries) != 3 || len(l.expirations) != 3 {
+		t.Fatalf("entry/heap sizes: %d/%d, want 3/3", len(l.entries), len(l.expirations))
 	}
 }
 
