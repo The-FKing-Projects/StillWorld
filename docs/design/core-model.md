@@ -20,9 +20,15 @@ Status: draft. These are design decisions, not a finished specification.
 - **Email is optional** and used only for password reset. Accounts without an
   email cannot reset their own password and need the host's help.
 
+- **Passwords are hashed with Argon2id.**
+- **Sessions are server-side.** A random token in a cookie references a session
+  stored in PostgreSQL, so sessions can be revoked immediately. Sessions use
+  sliding expiry: 30 days since last activity, with a hard cap of 90 days.
+
 ## Still open
 
-- Password hashing, session handling, and password reset flow details.
+- Password reset flow details and Argon2id parameters.
+- Cookie and CSRF protections.
 - What a world contains (the entity model) beyond players and Turns.
 - Regeneration rate and cap: game-level configuration or fixed by the engine.
 - Concurrency rules when one player submits actions at the same time.
