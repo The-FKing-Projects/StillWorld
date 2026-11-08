@@ -47,7 +47,7 @@ type Account struct {
 // Service provides account and session operations backed by PostgreSQL.
 type Service struct {
 	DB     *sql.DB
-	Params Params
+	params Params
 	Now    func() time.Time
 
 	dummyHash string
@@ -55,7 +55,11 @@ type Service struct {
 
 // NewService returns a Service using DefaultParams and the system clock.
 func NewService(db *sql.DB) (*Service, error) {
-	s := &Service{DB: db, Params: DefaultParams, Now: time.Now}
+	return newService(db, DefaultParams)
+}
+
+func newService(db *sql.DB, params Params) (*Service, error) {
+	s := &Service{DB: db, params: params, Now: time.Now}
 	if err := s.init(); err != nil {
 		return nil, err
 	}
@@ -64,7 +68,7 @@ func NewService(db *sql.DB) (*Service, error) {
 
 // init prepares a dummy hash used to equalise login timing for unknown users.
 func (s *Service) init() error {
-	h, err := HashPassword("dummy password for timing", s.Params)
+	h, err := HashPassword("dummy password for timing", s.params)
 	if err != nil {
 		return err
 	}
@@ -89,7 +93,7 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 		emailArg = email
 	}
 
-	hash, err := HashPassword(password, s.Params)
+	hash, err := HashPassword(password, s.params)
 	if err != nil {
 		return 0, err
 	}
@@ -130,7 +134,10 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 	}
 	// Verify even for unknown users so response time doesn't reveal which exist.
 	ok, verr := VerifyPassword(password, hash)
-	if verr != nil || !ok || !found {
+	if verr != nil {
+		return "", fmt.Errorf("verify stored password hash: %w", verr)
+	}
+	if !ok || !found {
 		return "", ErrInvalidCredentials
 	}
 
@@ -157,8 +164,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Account, erro
 	err := s.DB.QueryRowContext(ctx,
 		`WITH s AS (
 		     UPDATE sessions
-		        SET last_seen_at = $2,
-		            expires_at = LEAST($2::timestamptz + $3 * interval '1 second',
+		        SET last_seen_at = GREATEST(last_seen_at, $2::timestamptz),
+		            expires_at = LEAST(GREATEST(last_seen_at, $2::timestamptz) + $3 * interval '1 second',
 		                               created_at + $4 * interval '1 second')
 		      WHERE token_hash = $1 AND expires_at > $2
 		  RETURNING account_id)

@@ -102,7 +102,7 @@ func (s *Server) protect(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 
 		if !isSafeMethod(r.Method) {
-			if !sameOrigin(r) {
+			if !s.sameOrigin(r) {
 				http.Error(w, "cross-site request rejected", http.StatusForbidden)
 				return
 			}
@@ -116,9 +116,8 @@ func isSafeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
-// sameOrigin rejects browser requests initiated by another site. Requests with
-// neither header come from non-browser clients, which are not a CSRF vector.
-func sameOrigin(r *http.Request) bool {
+// sameOrigin checks the public scheme without trusting proxy-provided headers.
+func (s *Server) sameOrigin(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	default:
@@ -126,18 +125,19 @@ func sameOrigin(r *http.Request) bool {
 	}
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		return true
+		return r.Header.Get("Sec-Fetch-Site") == "same-origin" || r.Header.Get("X-Stillworld-Request") == "1"
 	}
 	u, err := url.Parse(origin)
-	return err == nil && u.Host == r.Host
+	scheme := "https"
+	if s.opts.InsecureCookies {
+		scheme = "http"
+	}
+	return err == nil && u.Scheme == scheme && strings.EqualFold(u.Host, r.Host) &&
+		u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == ""
 }
 
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	ip := s.clientIP(r)
-	if s.signupIP.blocked(ip) {
-		http.Error(w, "too many signups; try again later", http.StatusTooManyRequests)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
@@ -148,7 +148,12 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.release()
 
-	s.signupIP.add(ip)
+	slot := s.signupIP.reserve(ip)
+	if slot == nil {
+		http.Error(w, "too many signups; try again later", http.StatusTooManyRequests)
+		return
+	}
+	defer s.signupIP.finish(slot, true, false)
 	_, err := s.auth.Register(r.Context(), r.PostFormValue("username"), r.PostFormValue("email"), r.PostFormValue("password"))
 	switch {
 	case err == nil:
@@ -172,25 +177,32 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := s.clientIP(r)
 	username := strings.ToLower(r.PostFormValue("username"))
-	if s.loginIP.blocked(ip) || s.loginUser.blocked(username) {
-		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
-		return
-	}
 	if !s.acquire(r.Context()) {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
 		return
 	}
 	defer s.release()
+	ipSlot := s.loginIP.reserve(ip)
+	if ipSlot == nil {
+		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
+	userSlot := s.loginUser.reserve(username)
+	if userSlot == nil {
+		s.loginIP.finish(ipSlot, false, false)
+		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
 
 	token, err := s.auth.Login(r.Context(), r.PostFormValue("username"), r.PostFormValue("password"))
+	failed := errors.Is(err, auth.ErrInvalidCredentials)
+	s.loginIP.finish(ipSlot, failed, false)
+	s.loginUser.finish(userSlot, failed, err == nil)
 	switch {
 	case err == nil:
-		s.loginUser.reset(username)
 		s.setCookie(w, token, int(auth.IdleTimeout/time.Second))
 		fmt.Fprintln(w, "logged in")
 	case errors.Is(err, auth.ErrInvalidCredentials):
-		s.loginIP.add(ip)
-		s.loginUser.add(username)
 		http.Error(w, "invalid username or password", http.StatusUnauthorized)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -242,9 +254,11 @@ func (s *Server) setCookie(w http.ResponseWriter, value string, maxAge int) {
 
 func (s *Server) acquire(ctx context.Context) bool {
 	select {
+	case <-ctx.Done():
+		return false
 	case s.hashSlots <- struct{}{}:
 		return true
-	case <-ctx.Done():
+	default:
 		return false
 	}
 }

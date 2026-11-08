@@ -23,14 +23,20 @@ type Params struct {
 var DefaultParams = Params{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2}
 
 const (
-	saltLen = 16
-	keyLen  = 32
+	saltLen        = 16
+	keyLen         = 32
+	maxMemoryKiB   = 256 * 1024
+	maxIterations  = 10
+	maxParallelism = 16
 )
 
 var errInvalidHash = errors.New("auth: invalid password hash encoding")
 
 // HashPassword returns a PHC-formatted Argon2id hash of password.
 func HashPassword(password string, p Params) (string, error) {
+	if !validParams(p) {
+		return "", errors.New("auth: invalid Argon2id parameters")
+	}
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
@@ -42,16 +48,25 @@ func HashPassword(password string, p Params) (string, error) {
 		base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
+func validParams(p Params) bool {
+	return p.Parallelism > 0 && p.Parallelism <= maxParallelism &&
+		p.Iterations > 0 && p.Iterations <= maxIterations &&
+		p.MemoryKiB >= 8*uint32(p.Parallelism) && p.MemoryKiB <= maxMemoryKiB
+}
+
 // VerifyPassword reports whether password matches the encoded hash. The cost
 // parameters are read from the hash, so old hashes keep working after the
 // defaults change.
 func VerifyPassword(password, encoded string) (bool, error) {
+	if len(encoded) > 256 {
+		return false, errInvalidHash
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
 		return false, errInvalidHash
 	}
 	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version || parts[2] != fmt.Sprintf("v=%d", version) {
 		return false, errInvalidHash
 	}
 	var p Params
@@ -60,12 +75,15 @@ func VerifyPassword(password, encoded string) (bool, error) {
 		return false, errInvalidHash
 	}
 	p.Parallelism = uint8(par)
+	if !validParams(p) || parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", p.MemoryKiB, p.Iterations, p.Parallelism) {
+		return false, errInvalidHash
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(salt) != saltLen {
 		return false, errInvalidHash
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
-	if err != nil || len(want) == 0 {
+	if err != nil || len(want) != keyLen {
 		return false, errInvalidHash
 	}
 	got := argon2.IDKey([]byte(password), salt, p.Iterations, p.MemoryKiB, p.Parallelism, uint32(len(want)))
