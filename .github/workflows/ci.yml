@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: stillworld
+          POSTGRES_PASSWORD: stillworld
+          POSTGRES_DB: stillworld_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stillworld"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      STILLWORLD_DATABASE_URL: postgres://stillworld:stillworld@localhost:5432/stillworld_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Migrate
+        run: go run ./cmd/stillworld migrate
