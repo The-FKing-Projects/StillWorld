@@ -1,0 +1,30 @@
+# Go build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Go tooling
+/vendor/
+go.work
+go.work.sum
+coverage.*
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Local data
+*.sql.local
+/data/
+*.dump
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
