@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"encoding/base64"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -45,6 +47,27 @@ func TestVerifyRejectsMalformed(t *testing.T) {
 	}
 }
 
+func TestInvalidArgon2Params(t *testing.T) {
+	for _, p := range []Params{
+		{MemoryKiB: 8, Iterations: 0, Parallelism: 1},
+		{MemoryKiB: 8, Iterations: 1, Parallelism: 0},
+		{MemoryKiB: 7, Iterations: 1, Parallelism: 1},
+		{MemoryKiB: maxMemoryKiB + 1, Iterations: 1, Parallelism: 1},
+		{MemoryKiB: 8, Iterations: maxIterations + 1, Parallelism: 1},
+		{MemoryKiB: 256, Iterations: 1, Parallelism: maxParallelism + 1},
+	} {
+		if _, err := HashPassword("password", p); err == nil {
+			t.Errorf("HashPassword accepted %+v", p)
+		}
+		encoded := fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
+			p.MemoryKiB, p.Iterations, p.Parallelism,
+			base64.RawStdEncoding.EncodeToString(make([]byte, saltLen)),
+			base64.RawStdEncoding.EncodeToString(make([]byte, keyLen)))
+		if _, err := VerifyPassword("password", encoded); err == nil {
+			t.Errorf("VerifyPassword accepted %+v", p)
+		}
+	}
+}
 func TestVerifyUsesStoredParams(t *testing.T) {
 	h, _ := HashPassword("pw", Params{MemoryKiB: 16, Iterations: 2, Parallelism: 1})
 	if ok, err := VerifyPassword("pw", h); err != nil || !ok {

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,6 +60,7 @@ func (f *fakeAuth) Logout(_ context.Context, token string) error {
 func post(h http.Handler, path string, form url.Values, mutate func(*http.Request)) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("X-Stillworld-Request", "1")
 	r.Host = "game.example"
 	r.RemoteAddr = "203.0.113.5:4000"
 	if mutate != nil {
@@ -166,6 +169,9 @@ func TestCrossSiteRequestsRejected(t *testing.T) {
 		"same-site fetch metadata":  func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "same-site") },
 		"foreign origin":            func(r *http.Request) { r.Header.Set("Origin", "https://evil.example") },
 		"foreign origin with port":  func(r *http.Request) { r.Header.Set("Origin", "https://game.example:8443") },
+		"wrong scheme":              func(r *http.Request) { r.Header.Set("Origin", "http://game.example") },
+		"no CSRF evidence":          func(r *http.Request) { r.Header.Del("X-Stillworld-Request") },
+		"invalid origin path":       func(r *http.Request) { r.Header.Set("Origin", "https://game.example/path") },
 	}
 	for name, mut := range cases {
 		if w := post(h, "/login", form, mut); w.Code != http.StatusForbidden {
@@ -177,7 +183,7 @@ func TestCrossSiteRequestsRejected(t *testing.T) {
 	}
 
 	allowed := map[string]func(*http.Request){
-		"no browser headers": nil,
+		"explicit client header": nil,
 		"same origin": func(r *http.Request) {
 			r.Header.Set("Origin", "https://game.example")
 			r.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -305,14 +311,96 @@ func TestLimiterBoundsMemory(t *testing.T) {
 	l := newLimiter(1, time.Hour, func() time.Time { return now })
 	l.maxKeys = 3
 	for _, k := range []string{"a", "b", "c", "d", "e"} {
-		l.add(k)
+		if e := l.reserve(k); e != nil {
+			l.finish(e, true, false)
+		}
 	}
 	if len(l.entries) > 3 {
 		t.Fatalf("entries = %d, want <= 3", len(l.entries))
 	}
 	now = now.Add(2 * time.Hour)
-	l.add("f")
+	e := l.reserve("f")
+	if e == nil {
+		t.Fatal("expired entries should allow a new key")
+	}
+	l.finish(e, true, false)
 	if len(l.entries) != 1 {
 		t.Fatalf("expired entries should be purged, have %d", len(l.entries))
+	}
+}
+
+func TestLimiterConcurrentAdmissions(t *testing.T) {
+	l := newLimiter(10, time.Hour, time.Now)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var allowed atomic.Int32
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if e := l.reserve("same"); e != nil {
+				allowed.Add(1)
+				l.finish(e, true, false)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if got := allowed.Load(); got != 10 {
+		t.Fatalf("admitted %d requests, want 10", got)
+	}
+}
+
+func TestLimiterFullFailsClosed(t *testing.T) {
+	l := newLimiter(1, time.Hour, time.Now)
+	l.maxKeys = 1
+	e := l.reserve("first")
+	if e == nil {
+		t.Fatal("first admission failed")
+	}
+	if l.reserve("new") != nil {
+		t.Fatal("new key bypassed a full limiter")
+	}
+	l.finish(e, true, false)
+}
+
+func TestHashAdmissionDoesNotQueue(t *testing.T) {
+	s := New(nil, Options{})
+	for i := 0; i < maxConcurrentHashes; i++ {
+		if !s.acquire(context.Background()) {
+			t.Fatal("failed to fill hash slots")
+		}
+	}
+	if s.acquire(context.Background()) {
+		t.Fatal("admitted request when all slots are occupied")
+	}
+	for i := 0; i < maxConcurrentHashes; i++ {
+		s.release()
+	}
+}
+
+func TestOriginSchemeForLocalAndProxy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		opts   Options
+		origin string
+		want   int
+	}{
+		{"local HTTP", Options{InsecureCookies: true}, "http://game.example", http.StatusOK},
+		{"local wrong scheme", Options{InsecureCookies: true}, "https://game.example", http.StatusForbidden},
+		{"proxy HTTPS", Options{BehindProxy: true}, "https://game.example", http.StatusOK},
+		{"proxy wrong scheme", Options{BehindProxy: true}, "http://game.example", http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeAuth()
+			f.users["alice"] = "password123"
+			w := post(New(f, tc.opts).Handler(), "/login",
+				url.Values{"username": {"alice"}, "password": {"password123"}},
+				func(r *http.Request) { r.Header.Set("Origin", tc.origin) })
+			if w.Code != tc.want {
+				t.Fatalf("status = %d, want %d", w.Code, tc.want)
+			}
+		})
 	}
 }

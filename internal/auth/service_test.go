@@ -4,35 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/The-FKing-Projects/StillWorld/internal/db"
+	"github.com/The-FKing-Projects/StillWorld/internal/testdb"
 )
 
 func newTestService(t *testing.T) (*Service, *time.Time) {
 	t.Helper()
-	url := os.Getenv("STILLWORLD_DATABASE_URL")
-	if url == "" {
-		t.Skip("STILLWORLD_DATABASE_URL not set")
-	}
-	ctx := context.Background()
-	d, err := db.Open(ctx, url)
+	d := testdb.Open(t)
+	s, err := newService(d, testParams)
 	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { d.Close() })
-	if err := db.Migrate(ctx, d); err != nil {
-		t.Fatal(err)
-	}
-	s, err := NewService(d)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Params = testParams
-	if err := s.init(); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Truncate(time.Second)
@@ -176,5 +159,33 @@ func TestIdleExpiryAndCleanup(t *testing.T) {
 	n, err := s.DeleteExpiredSessions(ctx)
 	if err != nil || n < 1 {
 		t.Errorf("DeleteExpiredSessions = %d, %v", n, err)
+	}
+}
+
+func TestSessionActivityDoesNotMoveBackward(t *testing.T) {
+	s, now := newTestService(t)
+	ctx := context.Background()
+	name, _ := register(t, s, "")
+	start := *now
+	token, err := s.Login(ctx, name, "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	*now = start.Add(10 * 24 * time.Hour)
+	if _, err := s.Authenticate(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	// A request that captured an earlier time can finish after a later request.
+	*now = start.Add(5 * 24 * time.Hour)
+	if _, err := s.Authenticate(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	var lastSeen, expires time.Time
+	if err := s.DB.QueryRowContext(ctx, `SELECT last_seen_at, expires_at FROM sessions WHERE token_hash = $1`, hashToken(token)).Scan(&lastSeen, &expires); err != nil {
+		t.Fatal(err)
+	}
+	want := start.Add(10 * 24 * time.Hour)
+	if !lastSeen.Equal(want) || !expires.Equal(want.Add(IdleTimeout)) {
+		t.Fatalf("activity moved backwards: last=%v expires=%v", lastSeen, expires)
 	}
 }

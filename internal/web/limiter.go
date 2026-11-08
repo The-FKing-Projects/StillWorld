@@ -1,6 +1,7 @@
 package web
 
 import (
+	"crypto/sha256"
 	"sync"
 	"time"
 )
@@ -18,6 +19,7 @@ type limiter struct {
 
 type entry struct {
 	count   int
+	pending int
 	resetAt time.Time
 }
 
@@ -25,19 +27,10 @@ func newLimiter(max int, window time.Duration, now func() time.Time) *limiter {
 	return &limiter{max: max, window: window, maxKeys: 100_000, now: now, entries: map[string]*entry{}}
 }
 
-// blocked reports whether key has already used up its allowance.
-func (l *limiter) blocked(key string) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	e, ok := l.entries[key]
-	if !ok || !l.now().Before(e.resetAt) {
-		return false
-	}
-	return e.count >= l.max
-}
-
-// add records one event for key.
-func (l *limiter) add(key string) {
+// reserve counts in-flight requests so concurrent attempts cannot exceed a quota.
+func (l *limiter) reserve(key string) *entry {
+	digest := sha256.Sum256([]byte(key))
+	key = string(digest[:])
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -47,21 +40,28 @@ func (l *limiter) add(key string) {
 			l.purge(now)
 		}
 		if len(l.entries) >= l.maxKeys {
-			// Still full of live entries: refuse to grow, which fails closed
-			// only for keys already tracked, never for the whole server.
-			return
+			return nil
 		}
 		e = &entry{resetAt: now.Add(l.window)}
 		l.entries[key] = e
 	}
-	e.count++
+	if e.count+e.pending >= l.max {
+		return nil
+	}
+	e.pending++
+	return e
 }
 
-// reset forgets key, for example after a successful login.
-func (l *limiter) reset(key string) {
+// finish releases an admission and records a failure or clears prior failures.
+func (l *limiter) finish(e *entry, failed, reset bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.entries, key)
+	e.pending--
+	if reset {
+		e.count = 0
+	} else if failed {
+		e.count++
+	}
 }
 
 func (l *limiter) purge(now time.Time) {
