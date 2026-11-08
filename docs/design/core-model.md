@@ -15,9 +15,14 @@ Status: draft. These are design decisions, not a finished specification.
   database transaction that also spends its Turns. Delayed or queued actions
   are out of scope for now.
 
+- **Accounts live in StillWorld's own database.** Players sign in with a
+  username and password; external login providers are out of scope for now.
+- **Email is optional** and used only for password reset. Accounts without an
+  email cannot reset their own password and need the host's help.
+
 ## Still open
 
-- Player identity and authentication.
+- Password hashing, session handling, and password reset flow details.
 - What a world contains (the entity model) beyond players and Turns.
 - Regeneration rate and cap: game-level configuration or fixed by the engine.
 - Concurrency rules when one player submits actions at the same time.
