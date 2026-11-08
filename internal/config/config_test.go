@@ -26,3 +26,36 @@ func TestFromLookupMissing(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultsAndOverrides(t *testing.T) {
+	cfg, err := fromLookup(lookupFrom(map[string]string{"STILLWORLD_DATABASE_URL": "postgres://x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAddr != "127.0.0.1:8080" || cfg.InsecureCookies || cfg.BehindProxy {
+		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+
+	cfg, err = fromLookup(lookupFrom(map[string]string{
+		"STILLWORLD_DATABASE_URL":     "postgres://x",
+		"STILLWORLD_LISTEN_ADDR":      ":9000",
+		"STILLWORLD_INSECURE_COOKIES": "true",
+		"STILLWORLD_BEHIND_PROXY":     "1",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ListenAddr != ":9000" || !cfg.InsecureCookies || !cfg.BehindProxy {
+		t.Fatalf("unexpected overrides: %+v", cfg)
+	}
+}
+
+func TestInvalidBool(t *testing.T) {
+	_, err := fromLookup(lookupFrom(map[string]string{
+		"STILLWORLD_DATABASE_URL":     "postgres://x",
+		"STILLWORLD_INSECURE_COOKIES": "maybe",
+	}))
+	if err == nil {
+		t.Fatal("expected error for invalid boolean")
+	}
+}
