@@ -31,6 +31,10 @@ rightmost `X-Forwarded-For` value. The proxy must also preserve the public
 `Host` header, including any port; the origin check does not use
 `X-Forwarded-Host`.
 
+For a private or staging single-VPS setup, see the
+[deployment guide](docs/deployment.md). It documents the current operational
+limits and does not change the project's public-deployment readiness status.
+
 ## Clean-room development
 
 StillWorld is being developed independently. Other games may inform broad
