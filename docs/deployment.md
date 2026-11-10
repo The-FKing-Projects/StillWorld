@@ -187,13 +187,26 @@ environment variables:
 | Failed logins per case-insensitive username | 10 failures per 15-minute window |
 | Signup requests per client IP | 5 per hour |
 
-These are per-process, in-memory limits, not shared across servers, and restart
-with the process. Successful login clears the username failure counter. The
-password-hash work uses Argon2id with 64 MiB per operation by default, so four
-simultaneous operations can consume about 256 MiB for hashing alone, in
-addition to PostgreSQL, the application, and the operating system. Load-test
-the target host and monitor resource use; do not treat these initial limits as
-a guarantee of public-service capacity or abuse resistance.
+These limits are per-process and in memory: they are not shared across servers
+or persisted in PostgreSQL, and restart with the process. Successful login
+clears the username failure counter. The password-hash work uses Argon2id with
+64 MiB per operation by default, so four simultaneous operations can consume
+about 256 MiB for hashing alone, in addition to PostgreSQL, the application,
+and the operating system. Load-test the target host and monitor resource use;
+do not treat these initial limits as a guarantee of public-service capacity or
+abuse resistance.
+
+The per-username login limit can be deliberately exhausted by someone who
+knows a username, preventing that account from logging in until its 15-minute
+window expires. Signup returns distinct errors for an already-used username
+and email address, so it reveals whether an email is registered. Replacing the
+email-conflict response with a generic success message alone would not remove
+that signal while signup immediately creates usable accounts: attempting to
+log in with the submitted credentials reveals whether creation succeeded, and
+retrying a successful signup reveals the username conflict. Email verification
+or another flow change would be needed to avoid those signals; signup does not
+currently verify email addresses. There are also no administrator commands or
+endpoints to list or disable accounts or reset passwords.
 
 ## Backups and restore checks
 
