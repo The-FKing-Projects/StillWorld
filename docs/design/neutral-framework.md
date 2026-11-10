@@ -510,10 +510,19 @@ persisted rule rejection by catching and ignoring it.
 An action admitted before expiry may finish after expiry within its bounded
 deadline. Any later request that obtains the player lock after expiry is
 rejected even if an earlier action succeeded. Cleanup deletes only committed
-outcomes whose expiry is in the past, in bounded batches. It cannot see an
-uncommitted insert; one committed after a cleanup pass is removed by a later
-pass. This is safe because no expired request is allowed to execute anew.
-If cleanup is delayed, storage grows but replay protection does not weaken.
+outcomes whose expiry is in the past, in bounded batches. It must acquire the
+same account-row lock used by action execution before deleting that player's
+outcomes. Select account IDs in stable order with `SKIP LOCKED`, then recheck
+expiry using database wall-clock time and delete only expired outcomes for
+those locked accounts within the same transaction.
+This prevents cleanup from removing a committed result between an action's
+expiry check and outcome lookup. It also prevents cleanup from racing an
+in-flight action that was admitted before expiry.
+
+Cleanup cannot see an uncommitted insert; one committed after a cleanup pass
+is removed by a later pass. This is safe because no expired request is allowed
+to execute anew. If cleanup is delayed, storage grows but replay protection
+does not weaken.
 
 ## Rejected and failed attempts
 
@@ -574,6 +583,7 @@ criteria, not claims about existing coverage:
 | Apply or result serialization fails technically | Full rollback, no final outcome, same-ID retry permitted |
 | Response is lost after commit | Same-ID retry returns the committed result |
 | Request waits for a lock until after expiry | Rejected before game work, regardless of record cleanup |
+| Cleanup races a duplicate lookup or pre-expiry action | Shared account lock prevents deleting an outcome used by that transaction |
 | Deadline/deadlock or unconfirmed commit | Explicit technical/unknown outcome, never false success |
 | Different players contend on shared game state | Locks/conditions preserve the game's invariant |
 | Framework migrations succeed and game migration fails | Failed command, framework retained, serving refused |
