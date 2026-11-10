@@ -2,8 +2,8 @@
 
 Status: initial implementation contract. These decisions describe the intended
 boundary, not an implemented or stable API. Internal Turns arithmetic is
-implemented separately; see [Turns API](turns.md). The text interface has
-separate design work remaining.
+implemented separately; see [Turns API](turns.md). The text-interface
+decisions are specified below; their implementation remains future work.
 
 ## Shared foundation
 
@@ -326,8 +326,8 @@ exclusion while undoing gameplay changes; the signatures alone do not provide
 that guarantee.
 
 Registration associates the stable action name with an `Action` through the
-composition API above. HTTP route names and result-page navigation belong to
-the text-interface workstream, not this SQL/action contract.
+composition API above. The HTTP routes and result-page navigation are
+specified in the text-interface section below.
 
 ## Action authorization
 
@@ -552,8 +552,97 @@ and correlation ID, with details in logs; they never become stored business
 rejections. Distinguish confirmed retryable rollback from unknown commit
 outcome in responses. Neither permits automatically switching to a new token.
 
-## Minimal example
+## Text interface and HTTP contract
 
+The browser experience uses server-rendered HTML with minimal CSS. It is the
+primary player interface and must work without JavaScript. Also provide a JSON
+HTTP API for programmatic clients; it uses the same authentication, action
+dispatcher, request IDs, validation, and outcomes as the HTML interface. Do
+not add a separate plain-text player interface or a second action execution
+path.
+
+Pages and form controls are game-owned. Use semantic HTML, associated labels,
+keyboard-operable controls, visible focus, headings, and text status messages
+that do not rely on color alone. Keep pages responsive and small for narrow
+screens and low-bandwidth connections. Render action results with normal
+`html/template` escaping. Actions return data, never HTML or template
+fragments.
+
+Provide server-rendered `GET /login` and `GET /signup` pages whose ordinary
+forms submit to the existing `POST /login` and `POST /signup` endpoints. Logout
+is a same-origin `POST /logout` form; `/me` remains the authenticated account
+endpoint. Successful browser sign-in, signup, and logout use `303 See Other`
+to the game-owned home page. Validation failures render a page with safe,
+visible text while retaining the existing cookie and CSRF protections.
+
+### Routes and form submission
+
+Use the registered action name as the route suffix; names such as
+`counter.increment` are one path segment.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /actions/{actionName}` | Same-origin HTML form submission |
+| `POST /api/actions/{actionName}` | JSON action submission |
+| `POST /api/action-requests/{actionName}` | Issue a request ID for a JSON client |
+| `GET /actions/results/{nonce}` | Retrieve a committed HTML outcome |
+
+HTML forms use ordinary `POST` submissions with
+`application/x-www-form-urlencoded`. Include the signed request ID in a hidden
+`request_id` field. A game-provided form adapter maps the submitted fields to
+the action's typed JSON input; the adapter is part of the game/composition
+layer, not the HTTP-independent `action.Action` interface. It must validate
+fields, reject duplicate scalar and unexpected fields, and serialize the same
+values deterministically on retries. It must not infer numeric types through
+floating point. Enforce the action input size limit after conversion.
+
+The JSON endpoint accepts one bounded JSON object as the exact action input
+and carries the signed request ID in the `Idempotency-Key` header. The
+request-issuance endpoint is authenticated and rate-limited and returns the
+request ID and its expiry. A server-rendered game page obtains its form token
+through the framework's authenticated request-token helper; the helper takes
+identity from the authenticated request context, never from a caller-supplied
+player ID. In both paths, the request ID is bound to the action and first
+submitted input by the rules above.
+
+All action and request-issuance POSTs require the existing same-origin/CSRF
+protections. The signed request ID is not a CSRF token. Browser forms post to
+the same origin; non-browser clients use the documented request header or
+same-origin evidence. GET routes never execute actions or spend Turns.
+
+### Outcomes and retry behavior
+
+The JSON endpoint returns the stored success or game-rule rejection directly.
+Success uses HTTP 200; a final game-rule rejection uses 422. A matching retry
+returns the same stored outcome and status. Protocol errors use appropriate
+4xx responses: malformed input is 400, missing authentication is 401, failed
+CSRF checks are 403, and action/input conflicts are 409. Expired request IDs
+return 410. A missing result is not proof that an earlier request failed.
+
+For HTML submissions, a committed success or rejection redirects with 303 to
+`/actions/results/{nonce}`. The result route authenticates the current player
+and looks up the outcome by that player and nonce; the nonce is not a
+credential. Do not put the full signed token in a URL. The result page presents
+the stored result or safe rejection message, not current game state rendered
+as though it were the original outcome.
+
+A confirmed technical rollback returns a safe retryable error with a
+correlation ID. An uncertain commit returns a distinct safe
+outcome-unknown error. Neither error automatically resubmits the action,
+replaces the request ID, or claims the action failed. Tell the player or API
+client to retry the original submission with the same request ID and
+byte-identical input; a matching committed result will be replayed. A changed
+form, expired request ID, or final rejection requires the player to review
+current state and deliberately begin a new action with a newly issued ID.
+Never silently create a fresh ID after a timeout, response loss, or expiry.
+
+HTML technical-error pages use an accessible status message and correlation
+ID, without exposing internal errors or reflecting unescaped submitted
+values. JSON errors use stable framework codes and the same retry distinction.
+These presentation rules do not change which outcomes are persisted by the
+action transaction.
+
+## Minimal example
 Include a small neutral example game upstream: one action spends Turns to
 change a persistent counter stored in a game-owned table. It should exercise
 game registration, game migrations, and the shared action transaction once
@@ -605,8 +694,9 @@ separate milestone and must not be inferred from design approval.
 - Turns work (#20) specifies regeneration arithmetic, fractional balances,
   rate/cap configuration fields, and behavior when settings change. It is a
   prerequisite for implementing authoritative action spending.
-- Text-interface work (#21) specifies action routes, ordinary HTML forms,
-  result presentation, and safe retry UX, using these action contracts.
+- The text-interface decisions above specify HTML forms, the JSON API, result
+  presentation, and safe retry UX. Implementing those routes remains future
+  work.
 - Deployment and operational work (#22 and #23) specifies key provisioning,
   backups, maintenance upgrades, proxy configuration, and concrete admission
   limits before public exposure.

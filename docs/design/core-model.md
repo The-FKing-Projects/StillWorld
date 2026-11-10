@@ -18,6 +18,10 @@ Status: draft. These are design decisions, not a finished specification.
 - **Same-player actions are serialized.** StillWorld locks the acting player's
   Turns row for the action transaction. Games must also protect shared game
   state; see [Neutral framework boundary](neutral-framework.md).
+- **Players use server-rendered HTML forms, with a JSON API for clients.**
+  Both interfaces share the same authenticated action pipeline and
+  request-ID retry rules; see
+  [Neutral framework boundary](neutral-framework.md).
 
 - **Accounts live in StillWorld's own database.** Players sign in with a
   username and password; external login providers are out of scope for now.
@@ -38,4 +42,4 @@ Status: draft. These are design decisions, not a finished specification.
 - Game configuration integration (the internal Turns policy and policy-change
   semantics are implemented; see [Turns API](turns.md)).
 - Implementation of the documented locking, retry, and duplicate-request rules.
-- The text interface: HTTP shape, rendering, and input.
+- Implementation of the documented HTML routes, JSON API, and result pages.
