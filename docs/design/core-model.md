@@ -15,6 +15,9 @@ Status: draft. These are design decisions, not a finished specification.
 - **Actions resolve instantly.** An action is validated and applied in a single
   database transaction that also spends its Turns. Delayed or queued actions
   are out of scope for now.
+- **Same-player actions are serialized.** StillWorld locks the acting player's
+  Turns row for the action transaction. Games must also protect shared game
+  state; see [Neutral framework boundary](neutral-framework.md).
 
 - **Accounts live in StillWorld's own database.** Players sign in with a
   username and password; external login providers are out of scope for now.
@@ -30,8 +33,8 @@ Status: draft. These are design decisions, not a finished specification.
 
 - Password reset flow details and Argon2id parameters.
 - Cookie and CSRF protections.
-- The game-owned entity model beyond players and Turns; see
+- Implementation of the game-owned entity and action boundary; see
   [Neutral framework boundary](neutral-framework.md).
 - Turns configuration format and behavior when settings change.
-- Concurrency rules when one player submits actions at the same time.
+- Implementation of the documented locking, retry, and duplicate-request rules.
 - The text interface: HTTP shape, rendering, and input.
