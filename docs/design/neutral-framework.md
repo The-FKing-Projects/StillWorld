@@ -146,23 +146,29 @@ unique within each history, and immutable after application. Migrations use
 transactional SQL initially; reject Goose's nontransactional directive in the
 composed runner until recovery for those migrations is explicitly supported.
 
-Both Goose providers use `WithTableName` for their respective histories and
-`WithSessionLocker` with the same fixed PostgreSQL advisory lock key.
-Each history runs on its lock-holding session, so losing that connection
-cannot leave that migrator running without its lock. Acquisition is
-context-bounded; release on every exit and discard a connection if unlocking
-cannot be confirmed. Serializing unrelated schemas in one database is
-acceptable initially.
+Use Goose `WithTableName` for the respective migration histories. A
+migration coordinator owns a dedicated PostgreSQL connection and holds one
+session advisory lock across the entire combined upgrade, including all
+preflight and final readiness checks. Goose's per-provider locking is
+disabled; locking each history separately would leave a race between
+framework and game migrations. All migration entry points must use this
+coordinator. Acquisition is context-bounded; release on every exit and
+discard the connection if unlocking cannot be confirmed. Serializing
+unrelated schemas in one database is acceptable initially.
 
-The lock covers each provider's operation, not an atomic two-provider
-upgrade. While holding it, check recorded game identity before either history and
-verify that framework versions exactly match this executable before applying
-game migrations. A competing newer migrator between stages must make an
-older command fail that check rather than apply an incompatible game
-migration. On first installation, bind an absent game identity under this
-same lock before any game migration, using a unique metadata row. Final
-readiness checks cover both histories. These preflight checks belong in the
-provider's session-lock scope, not an earlier unlocked pool query.
+Goose providers execute through the pool while the coordinator connection
+holds the advisory lock. Therefore reject a pool configured with only one
+open connection; otherwise migration execution would wait for the
+lock-holding connection. Account for the held connection in the pool
+capacity.
+
+Under the lock, check any recorded game identity before applying framework
+migrations. After framework migrations ensure the metadata row exists and
+bind an uninitialized database to this game ID, then verify that framework
+versions exactly match this executable before applying game migrations. A
+competing coordinator cannot intervene between stages. Final readiness
+checks cover both histories. No game migration may run before identity and
+framework compatibility checks succeed.
 
 Run upgrades during a maintenance stop, not concurrently with game traffic.
 An advisory lock coordinates migrators, not running servers. Serving verifies
@@ -265,7 +271,8 @@ The framework supplies a private transaction wrapper implementing `DB`, not
 a raw `*sql.Tx` whose commit methods could be recovered by a type assertion.
 The wrapper does not expose the underlying transaction. Game code must not
 issue transaction-control SQL, retain the wrapper after the callback, or use
-it in background goroutines. As elsewhere, this remains a trusted-code
+it in background goroutines. It must consume and close every `*sql.Rows`
+before the callback returns. As elsewhere, this remains a trusted-code
 contract rather than a security sandbox.
 
 Each registered action implementation is shared and must be safe for
@@ -464,7 +471,9 @@ contains no rejection and a rejection contains no success result. Responses
 carry an outcome format version, and retries return the stored outcome rather
 than rendering current game state as if it were the original result.
 
-Rejection codes use stable namespaced ASCII identifiers up to 128 bytes and
+Require the handler result to be exactly one valid JSON value, with no
+trailing data, and no larger than 64 KiB. Rejection codes use stable
+namespaced ASCII identifiers up to 128 bytes and
 messages are bounded to 1 KiB of valid UTF-8. Invalid or oversized handler
 outputs are implementation errors and roll back, not silently truncated
 successes. These initial limits bound storage per request; issuance and
