@@ -1,8 +1,9 @@
 # Neutral framework boundary
 
 Status: initial implementation contract. These decisions describe the intended
-boundary, not an implemented or stable API. Turns arithmetic and the text
-interface have separate design work remaining.
+boundary, not an implemented or stable API. Internal Turns arithmetic is
+implemented separately; see [Turns API](turns.md). The text interface has
+separate design work remaining.
 
 ## Shared foundation
 
@@ -15,8 +16,8 @@ transaction.
 All games use that action model. A game defines its own actions, their costs,
 entities, and effects; it does not replace or bypass the shared Turns and
 transaction model. Each game configures its own Turns regeneration rate and
-maximum balance. The specific values and configuration format are not yet
-decided.
+maximum balance. The internal policy is specified in [Turns API](turns.md);
+the game integration configuration format is not yet decided.
 
 ## Game-owned rules and data
 
@@ -292,9 +293,9 @@ StillWorld snapshots the returned cost, rejects negative costs and a nil
 Apply callback as implementation errors, and does not let Apply revise the
 cost. Zero permits a free action; positive costs must fit within the available
 Turns. Use nonnegative `int64` whole-Turn costs, with checked arithmetic.
-The existing database balance is `NUMERIC`; this interface does not silently
-change its storage or specify how fractional regeneration becomes spendable.
-That calculation is a prerequisite owned by the Turns workstream.
+The existing database balance remains `NUMERIC`. The [Turns API](turns.md)
+exposes only whole spendable Turns, preserving fractional elapsed accrual in
+the stored timestamp and existing fractional balances in the numeric column.
 
 ### Counter walkthrough
 

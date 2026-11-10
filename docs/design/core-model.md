@@ -35,6 +35,7 @@ Status: draft. These are design decisions, not a finished specification.
 - Cookie and CSRF protections.
 - Implementation of the game-owned entity and action boundary; see
   [Neutral framework boundary](neutral-framework.md).
-- Turns configuration format and behavior when settings change.
+- Game configuration integration (the internal Turns policy and policy-change
+  semantics are implemented; see [Turns API](turns.md)).
 - Implementation of the documented locking, retry, and duplicate-request rules.
 - The text interface: HTTP shape, rendering, and input.
