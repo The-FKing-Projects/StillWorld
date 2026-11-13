@@ -35,11 +35,11 @@ Status: draft. These are design decisions, not a finished specification.
 
 ## Still open
 
-- Password reset flow details and Argon2id parameters.
-- Cookie and CSRF protections.
-- Implementation of the game-owned entity and action boundary; see
-  [Neutral framework boundary](neutral-framework.md).
-- Game configuration integration (the internal Turns policy and policy-change
-  semantics are implemented; see [Turns API](turns.md)).
-- Implementation of the documented locking, retry, and duplicate-request rules.
-- Implementation of the documented HTML routes, JSON API, and result pages.
+- Password reset flow and target-host Argon2id parameters.
+- Main-executable configuration for choosing a downstream game and its Turns
+  policy; the public composition API already accepts these settings.
+- Maintain PostgreSQL-backed coverage of migration coordination, cleanup
+  locking, and the action locking, retry, and duplicate-request implementation.
+- Implementation of the documented HTML forms, player-facing routes, and
+  result pages; the authenticated JSON action API exists as an initial
+  implementation.

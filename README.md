@@ -15,12 +15,16 @@ not a commitment or a description of a finished game.
 
 ## Status
 
-StillWorld is in its initial stages. Its specific mechanics, features, and
-implementation have not yet been designed. This README describes the project's
-direction, not a feature-complete system.
+StillWorld is in its early stages. Accounts, server-side sessions, experimental
+HTTP authentication, PostgreSQL migrations, internal Turns accounting, and an
+initial action contract, execution engine, JSON API, public composition API,
+and coordinated game migrations are implemented as early foundations. There is
+not yet a configured production game or player-facing game interface. The
+PostgreSQL-backed action and composed-migration tests pass against a disposable
+local database. This is not a feature-complete system.
 
-The HTTP authentication endpoints are experimental and are not yet ready for
-public deployment. State-changing requests must include a matching `Origin`,
+The HTTP endpoints are experimental and are not yet ready for public
+deployment. State-changing requests must include a matching `Origin`,
 same-origin Fetch Metadata, or `X-Stillworld-Request: 1` for non-browser clients.
 Cross-site Fetch Metadata is rejected even when the custom header is present.
 The expected public scheme is HTTPS by default, including behind a TLS

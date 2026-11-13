@@ -1,15 +1,18 @@
 # Neutral framework boundary
 
-Status: initial implementation contract. These decisions describe the intended
-boundary, not an implemented or stable API. Internal Turns arithmetic is
-implemented separately; see [Turns API](turns.md). The text-interface
-decisions are specified below; their implementation remains future work.
+Status: initial implementation contract. The public `action` contract, an
+initial PostgreSQL action engine, JSON HTTP adapter, app-composition API, and
+coordinated game migration runner exist, but no game is configured by the main
+executable. The separate-module counter example demonstrates the public API.
+These decisions are not yet a stable API. Internal Turns arithmetic is implemented
+separately; see [Turns API](turns.md). The text-interface decisions are
+specified below; their implementation remains future work.
 
 ## Shared foundation
 
 One StillWorld deployment hosts one persistent world. StillWorld provides
-accounts and sessions, and is intended to provide a common action pipeline and
-per-player Turns. Actions resolve immediately: validation, spending Turns,
+accounts and sessions and is building a common action pipeline and per-player
+Turns. Actions resolve immediately: validation, spending Turns,
 and applying an action's effects must succeed or fail together in one database
 transaction.
 
@@ -54,12 +57,13 @@ commit or rollback methods. Games use SQL for their own tables without a
 new framework-specific database abstraction.
 
 Use `github.com/The-FKing-Projects/StillWorld/action` for the action contract
-and the module-root `stillworld` package for application composition. These
-packages do not exist yet. Authentication implementations stay under
-`internal`; a downstream game does not need a public password or session
-service merely to run the application.
+and the module-root `stillworld` package for application composition. Both
+packages now have initial implementations; their APIs are not yet stable.
+Authentication implementations stay under `internal`; a downstream game
+does not need a public password or session service merely to run the
+application.
 
-The composition API has this intended shape, with imports omitted:
+The initial composition API has this shape, with imports omitted:
 
 ```go
 type Registration struct {
@@ -83,12 +87,11 @@ by using `fs.Sub`. One game is registered per deployment, not a collection of
 runtime plugins. Game entities are ordinary game-owned Go types and SQL
 tables; there is no generic entity registry or upstream ORM.
 
-`Options` carries deployment settings, request-token verification keys, and
-the game's Turns policy. Its fields will be finalized with the Turns and
-deployment implementations, rather than introducing guessed regeneration
-semantics here. The caller owns the database connection pool and HTTP server
-and closes them on shutdown. `New` validates registration and configuration;
-it does not apply migrations or start a listener.
+`Options` carries `TurnsPolicy{Cap, Interval}`, the active request-key ID and
+verification-key map, cookie/proxy settings, and an optional clock. The caller
+owns the database connection pool and HTTP server and closes them on shutdown.
+`New` validates registration and configuration; it does not apply migrations
+or start a listener.
 
 The executable selects `Migrate` or `Handler` explicitly. `Handler` checks
 schema readiness before returning the framework's authentication and action
@@ -111,9 +114,9 @@ request IDs; an incompatible change uses a new action name. Check recorded
 outcomes before resolving the current handler so a retained outcome remains
 replayable even after its handler is removed.
 
-These are API design signatures, not compilable declarations of an existing
-library. Implementation must exercise them from a separate-module example
-to prove that no `internal` import or upstream edit is needed.
+The API is implemented at the module root. The separate-module counter example
+is the compatibility check that no `internal` import or upstream edit is
+needed.
 
 ## Migration composition
 
@@ -183,7 +186,9 @@ and resume pending migrations after correcting the cause. Never automatically
 downgrade the framework to compensate for a game migration failure. Back up
 before upgrading; backups and any manual recovery are operator actions, not
 implicit behavior of the migration command. The existing command still
-handles StillWorld migrations only.
+handles StillWorld migrations only and refuses to upgrade a schema already
+bound to a game; the composed app migration entry point is required for those
+deployments.
 
 ## Action transaction ownership
 
@@ -199,8 +204,8 @@ must not open an independent transaction or commit the supplied transaction.
 Game code is trusted server code, not a sandboxed plugin; this is an
 integration contract, not isolation from malicious game code.
 
-The signatures and execution rules below specify the intended contract;
-they do not imply that the orchestration exists yet.
+The public action contract and initial transaction orchestration are
+implemented, but remain experimental and are not yet a stable API.
 
 ## Action interface shape
 
@@ -229,13 +234,13 @@ such as sending email, that cannot be undone by a database rollback.
 
 For the counter example, Prepare validates the requested increment and
 calculates its cost; Apply updates the authenticated player's counter.
-The following signatures define the initial implementation target.
+The following signatures describe the initial action implementation.
 
 ### Go signature design
 
-The following is the design for the public `action` package, not an implemented
-or stable API. It uses `context`, `database/sql`, and `encoding/json` from the
-standard library:
+The public `action` package implements this initial, not-yet-stable contract.
+It uses `context`, `database/sql`, and `encoding/json` from the standard
+library:
 
 ```go
 type Player struct {
@@ -357,7 +362,9 @@ The Turns spend and game effects must commit together or both roll back.
 Games may define zero-Turn actions. These still use authentication,
 authorization, the shared transaction, per-player serialization, and
 duplicate-request protection. A zero cost does not exempt requests from
-rate limiting; the action-specific rate-limit policy remains to be designed.
+rate limiting. The initial HTTP adapter enforces fixed limits of 120 requests
+per IP and 60 per authenticated player per minute, with 64 concurrent action
+requests globally; configuration and broader operational policy remain open.
 Negative costs are rejected as implementation errors, not used to award Turns.
 
 ## Action concurrency
@@ -444,8 +451,9 @@ and the exact 24-hour lifetime; do not trust a timestamp simply because it
 was decoded successfully.
 
 Deployment supplies a shared verification-key ring and active issuance key.
-Require at least 32 cryptographically random bytes per key, reject missing
-or invalid configuration, and never generate a replacement on every restart.
+Key IDs are 1-32 ASCII letters, digits, underscores, or hyphens. Require at
+least 32 cryptographically random bytes per key, reject missing or invalid
+configuration, and never generate a replacement on every restart.
 Retain old verification keys until every token they signed has expired.
 Removing a key early must reject its tokens, never reinterpret them as new.
 All processes share keys and use the database clock for expiry decisions.
@@ -688,20 +696,26 @@ separate-module example to verify the integration boundary.
 
 ## Remaining work and scope
 
-The initial framework boundary design is covered here. Implementation is a
-separate milestone and must not be inferred from design approval.
+The framework boundary is implemented in an initial, experimental form.
+Implementation does not imply a stable API or a production-ready game.
 
-- Turns work (#20) specifies regeneration arithmetic, fractional balances,
-  rate/cap configuration fields, and behavior when settings change. It is a
-  prerequisite for implementing authoritative action spending.
+- Turns accounting and atomic spending are implemented internally (#20),
+  including regeneration arithmetic, fractional balances, and policy-change
+  semantics. The initial public app configuration accepts the game's policy.
 - The text-interface decisions above specify HTML forms, the JSON API, result
-  presentation, and safe retry UX. Implementing those routes remains future
-  work.
-- Deployment and operational work (#22 and #23) specifies key provisioning,
-  backups, maintenance upgrades, proxy configuration, and concrete admission
-  limits before public exposure.
-- Implement public composition, migration stores/locking, action execution,
-  request protection, and the neutral example with the acceptance cases above.
+  presentation, and safe retry UX. The authenticated JSON action API is
+  implemented; HTML forms, player-facing routes, and result presentation
+  remain future work.
+- Deployment guidance (#22) and authentication limitations (#23) are
+  documented; the in-memory rate limiter and lack of admin tooling remain
+  known operational limitations.
+- Continue to harden the public API and keep the separate-module example and
+  PostgreSQL acceptance tests in the verification workflow.
 
-The current code does not yet implement the action pipeline, Turns
-regeneration, game integration API, or example game.
+The current code implements account authentication, PostgreSQL migrations,
+internal Turns regeneration and spending, the initial action contract and
+engine, an optional authenticated JSON action API, public app composition,
+coordinated game migrations, and bounded expired-outcome cleanup. The
+separate-module counter example is implemented and its tests pass. Player-facing
+HTML routes and result presentation remain future work. PostgreSQL-backed
+action and migration tests pass against a disposable local database.

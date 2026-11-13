@@ -6,10 +6,8 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
-	"io/fs"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/pressly/goose/v3"
 )
 
 //go:embed migrations/*.sql
@@ -30,16 +28,12 @@ func Open(ctx context.Context, url string) (*sql.DB, error) {
 
 // Migrate applies all pending migrations.
 func Migrate(ctx context.Context, d *sql.DB) error {
-	sub, err := fs.Sub(migrations, "migrations")
-	if err != nil {
-		return fmt.Errorf("locate migrations: %w", err)
-	}
-	provider, err := goose.NewProvider(goose.DialectPostgres, d, sub)
-	if err != nil {
-		return fmt.Errorf("create migration provider: %w", err)
-	}
-	if _, err := provider.Up(ctx); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
-	}
-	return nil
+	return withMigrationLock(ctx, d, func() error {
+		if _, bound, err := deploymentGameID(ctx, d); err != nil {
+			return err
+		} else if bound {
+			return ErrGameMigrationRequired
+		}
+		return migrateFramework(ctx, d)
+	})
 }

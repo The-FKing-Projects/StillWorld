@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/The-FKing-Projects/StillWorld/internal/actiondata"
+	"github.com/The-FKing-Projects/StillWorld/internal/actionengine"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
 )
 
@@ -23,6 +25,12 @@ type Authenticator interface {
 	Logout(ctx context.Context, token string) error
 }
 
+// ActionService issues request IDs and executes actions for authenticated players.
+type ActionService interface {
+	IssueRequestID(context.Context, int64, string) (actionengine.RequestID, error)
+	Execute(context.Context, int64, string, string, []byte) (actionengine.Outcome, error)
+}
+
 // Options configure a Server.
 type Options struct {
 	// InsecureCookies drops the Secure cookie flag for local development.
@@ -31,13 +39,19 @@ type Options struct {
 	BehindProxy bool
 	// Now is the clock; defaults to time.Now.
 	Now func() time.Time
+	// Actions enables the authenticated action API.
+	Actions ActionService
 }
 
 const (
-	maxBodyBytes = 8 << 10
+	maxBodyBytes       int64 = 8 << 10
+	maxActionBodyBytes int64 = actiondata.MaxInputBytes
 	// maxConcurrentHashes bounds simultaneous Argon2id work, since each hash
 	// uses tens of MiB of memory.
-	maxConcurrentHashes = 4
+	maxConcurrentHashes  = 4
+	maxConcurrentActions = 64
+	maxActionsPerIP      = 120
+	maxActionsPerPlayer  = 60
 
 	loginWindow     = 15 * time.Minute
 	maxLoginFailsIP = 20
@@ -48,13 +62,17 @@ const (
 
 // Server serves the HTTP API.
 type Server struct {
-	auth       Authenticator
-	opts       Options
-	hashSlots  chan struct{}
-	loginIP    *limiter
-	loginUser  *limiter
-	signupIP   *limiter
-	cookieName string
+	auth        Authenticator
+	opts        Options
+	actions     ActionService
+	hashSlots   chan struct{}
+	loginIP     *limiter
+	loginUser   *limiter
+	signupIP    *limiter
+	actionIP    *limiter
+	actionUser  *limiter
+	actionSlots chan struct{}
+	cookieName  string
 }
 
 // New returns a Server.
@@ -68,13 +86,17 @@ func New(a Authenticator, opts Options) *Server {
 		name = "session"
 	}
 	return &Server{
-		auth:       a,
-		opts:       opts,
-		hashSlots:  make(chan struct{}, maxConcurrentHashes),
-		loginIP:    newLimiter(maxLoginFailsIP, loginWindow, opts.Now),
-		loginUser:  newLimiter(maxLoginFailsID, loginWindow, opts.Now),
-		signupIP:   newLimiter(maxSignupsIP, signupWindow, opts.Now),
-		cookieName: name,
+		auth:        a,
+		opts:        opts,
+		hashSlots:   make(chan struct{}, maxConcurrentHashes),
+		loginIP:     newLimiter(maxLoginFailsIP, loginWindow, opts.Now),
+		loginUser:   newLimiter(maxLoginFailsID, loginWindow, opts.Now),
+		signupIP:    newLimiter(maxSignupsIP, signupWindow, opts.Now),
+		actionIP:    newLimiter(maxActionsPerIP, time.Minute, opts.Now),
+		actionUser:  newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
+		actionSlots: make(chan struct{}, maxConcurrentActions),
+		actions:     opts.Actions,
+		cookieName:  name,
 	}
 }
 
@@ -88,6 +110,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /me", s.handleMe)
+	if s.actions != nil {
+		mux.HandleFunc("POST /api/action-requests/{actionName}", s.handleIssueActionRequest)
+		mux.HandleFunc("POST /api/actions/{actionName}", s.handleAction)
+	}
 	return s.protect(mux)
 }
 
@@ -103,10 +129,20 @@ func (s *Server) protect(next http.Handler) http.Handler {
 
 		if !isSafeMethod(r.Method) {
 			if !s.sameOrigin(r) {
+				if strings.HasPrefix(r.URL.Path, "/api/actions/") ||
+					strings.HasPrefix(r.URL.Path, "/api/action-requests/") {
+					writeActionError(w, http.StatusForbidden, "csrf_rejected", "Cross-site requests are not allowed.", "")
+					return
+				}
 				http.Error(w, "cross-site request rejected", http.StatusForbidden)
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+			bodyLimit := maxBodyBytes
+			if strings.HasPrefix(r.URL.Path, "/api/actions/") ||
+				strings.HasPrefix(r.URL.Path, "/api/action-requests/") {
+				bodyLimit = maxActionBodyBytes
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		}
 		next.ServeHTTP(w, r)
 	})

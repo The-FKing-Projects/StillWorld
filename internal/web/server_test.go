@@ -2,15 +2,19 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/The-FKing-Projects/StillWorld/action"
+	"github.com/The-FKing-Projects/StillWorld/internal/actionengine"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
 )
 
@@ -55,6 +59,37 @@ func (f *fakeAuth) Authenticate(_ context.Context, token string) (auth.Account, 
 func (f *fakeAuth) Logout(_ context.Context, token string) error {
 	delete(f.sessions, token)
 	return nil
+}
+
+type fakeActionService struct {
+	issueRequestID  actionengine.RequestID
+	issueErr        error
+	outcome         actionengine.Outcome
+	executeErr      error
+	issuedAccount   int64
+	issuedName      string
+	executedAccount int64
+	executedName    string
+	executedToken   string
+	executedInput   []byte
+	issueCalls      int
+	executeCalls    int
+}
+
+func (f *fakeActionService) IssueRequestID(_ context.Context, accountID int64, actionName string) (actionengine.RequestID, error) {
+	f.issueCalls++
+	f.issuedAccount = accountID
+	f.issuedName = actionName
+	return f.issueRequestID, f.issueErr
+}
+
+func (f *fakeActionService) Execute(_ context.Context, accountID int64, actionName, token string, input []byte) (actionengine.Outcome, error) {
+	f.executeCalls++
+	f.executedAccount = accountID
+	f.executedName = actionName
+	f.executedToken = token
+	f.executedInput = append([]byte(nil), input...)
+	return f.outcome, f.executeErr
 }
 
 func post(h http.Handler, path string, form url.Values, mutate func(*http.Request)) *httptest.ResponseRecorder {
@@ -201,6 +236,10 @@ func TestBodyTooLarge(t *testing.T) {
 	big := url.Values{"username": {"alice"}, "password": {strings.Repeat("a", 20_000)}}
 	if w := post(h, "/signup", big, nil); w.Code != http.StatusBadRequest {
 		t.Fatalf("oversized body: %d", w.Code)
+	}
+	largeForm := url.Values{"username": {"alice"}, "password": {strings.Repeat("a", 9_000)}}
+	if w := post(h, "/signup", largeForm, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("form body over the existing limit: %d", w.Code)
 	}
 }
 
@@ -449,4 +488,232 @@ func TestOriginSchemeForLocalAndProxy(t *testing.T) {
 			}
 		})
 	}
+}
+
+func actionRequest(h http.Handler, path, body string, cookie *http.Cookie, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Stillworld-Request", "1")
+	r.Header.Set("Idempotency-Key", "request-token")
+	r.Host = "game.example"
+	r.RemoteAddr = "203.0.113.5:4000"
+	if cookie != nil {
+		r.AddCookie(cookie)
+	}
+	if mutate != nil {
+		mutate(r)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func TestActionRequestIssuanceRequiresAuthenticationAndCSRF(t *testing.T) {
+	f := newFakeAuth()
+	f.sessions["valid"] = "alice"
+	service := &fakeActionService{
+		issueRequestID: actionengine.RequestID{
+			Token:     "signed-token",
+			ExpiresAt: time.Date(2026, time.January, 2, 3, 4, 5, 6, time.UTC),
+		},
+	}
+	h := New(f, Options{Actions: service}).Handler()
+
+	unauthenticated := actionRequest(h, "/api/action-requests/counter.increment", "", nil, nil)
+	if unauthenticated.Code != http.StatusUnauthorized || service.issueCalls != 0 {
+		t.Fatalf("unauthenticated response = %d, issue calls = %d", unauthenticated.Code, service.issueCalls)
+	}
+	stale := &http.Cookie{Name: "__Host-session", Value: "invalid"}
+	if w := actionRequest(h, "/api/action-requests/counter.increment", "", stale, nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("stale session response = %d", w.Code)
+	}
+	cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
+	crossSite := actionRequest(h, "/api/action-requests/counter.increment", "", cookie,
+		func(r *http.Request) { r.Header.Set("Sec-Fetch-Site", "cross-site") })
+	if crossSite.Code != http.StatusForbidden || service.issueCalls != 0 ||
+		crossSite.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Fatalf("cross-site response = %d, issue calls = %d", crossSite.Code, service.issueCalls)
+	}
+
+	response := actionRequest(h, "/api/action-requests/counter.increment", "", cookie, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("issuance response = %d: %s", response.Code, response.Body)
+	}
+	var body struct {
+		RequestID string `json:"request_id"`
+		ExpiresAt string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RequestID != "signed-token" || body.ExpiresAt != "2026-01-02T03:04:05.000000006Z" {
+		t.Fatalf("request ID response = %+v", body)
+	}
+	if service.issuedAccount != 1 || service.issuedName != "counter.increment" {
+		t.Fatalf("issued scope = account %d, action %q", service.issuedAccount, service.issuedName)
+	}
+	if got := response.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+func TestActionSubmissionValidationAndExecution(t *testing.T) {
+	f := newFakeAuth()
+	f.sessions["valid"] = "alice"
+	service := &fakeActionService{outcome: actionengine.Outcome{
+		Version: 1,
+		Status:  "success",
+		Result:  json.RawMessage(`{"count":1}`),
+	}}
+	h := New(f, Options{Actions: service}).Handler()
+	cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
+
+	if w := actionRequest(h, "/api/actions/counter.increment", `{"amount":1}`, nil, nil); w.Code != http.StatusUnauthorized {
+		t.Fatalf("missing authentication response = %d", w.Code)
+	}
+	if w := actionRequest(h, "/api/actions/counter.increment", `{"amount":1}`, cookie,
+		func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }); w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("content type response = %d", w.Code)
+	}
+	if w := actionRequest(h, "/api/actions/counter.increment", `{"amount":1}`, cookie,
+		func(r *http.Request) {
+			r.Header.Add("Idempotency-Key", "second-token")
+		}); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate request ID response = %d", w.Code)
+	}
+	if w := actionRequest(h, "/api/actions/counter.increment", `{"amount":1,"amount":2}`, cookie, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("duplicate JSON key response = %d", w.Code)
+	}
+	if service.executeCalls != 0 {
+		t.Fatalf("invalid requests reached action service %d times", service.executeCalls)
+	}
+
+	response := actionRequest(h, "/api/actions/counter.increment", `{"amount":1}`, cookie, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("execution response = %d: %s", response.Code, response.Body)
+	}
+	if service.executeCalls != 1 || service.executedAccount != 1 ||
+		service.executedName != "counter.increment" || service.executedToken != "request-token" ||
+		string(service.executedInput) != `{"amount":1}` {
+		t.Fatalf("execution arguments = %+v", service)
+	}
+}
+
+func TestActionBodyUsesActionInputLimit(t *testing.T) {
+	f := newFakeAuth()
+	f.sessions["valid"] = "alice"
+	service := &fakeActionService{outcome: actionengine.Outcome{Version: 1, Status: "success"}}
+	h := New(f, Options{Actions: service}).Handler()
+	input := `{"value":"` + strings.Repeat("x", 9_000) + `"}`
+	response := actionRequest(h, "/api/actions/counter.increment", input,
+		&http.Cookie{Name: "__Host-session", Value: "valid"}, nil)
+	if response.Code != http.StatusOK {
+		t.Fatalf("action body over the form limit: %d: %s", response.Code, response.Body)
+	}
+	if len(service.executedInput) != len(input) {
+		t.Fatalf("input length = %d, want %d", len(service.executedInput), len(input))
+	}
+}
+
+func TestActionErrorsAreMappedToJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		code int
+		want string
+	}{
+		{"expired", actionengine.ErrExpiredRequestID, http.StatusGone, "request_id_expired"},
+		{"conflict", actionengine.ErrRequestConflict, http.StatusConflict, "request_id_conflict"},
+		{"unknown outcome", actionengine.ErrOutcomeUnknown, http.StatusServiceUnavailable, "outcome_unknown"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeActionEngineError(recorder, test.err)
+			if recorder.Code != test.code {
+				t.Fatalf("status = %d, want %d", recorder.Code, test.code)
+			}
+			if got := recorder.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+				t.Fatalf("Content-Type = %q", got)
+			}
+			var body actionAPIError
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Code != test.want {
+				t.Fatalf("code = %q, want %q", body.Code, test.want)
+			}
+			if test.err == actionengine.ErrOutcomeUnknown &&
+				(body.CorrelationID == "" || body.Code != "outcome_unknown") {
+				t.Fatal("unknown outcome should be distinct and include a correlation ID")
+			}
+		})
+	}
+}
+
+func TestActionRejectionUsesUnprocessableEntity(t *testing.T) {
+	f := newFakeAuth()
+	f.sessions["valid"] = "alice"
+	service := &fakeActionService{outcome: actionengine.Outcome{
+		Version:   1,
+		Status:    "rejected",
+		Rejection: &action.Rejection{Code: "counter.limit", Message: "Limit reached."},
+	}}
+	h := New(f, Options{Actions: service}).Handler()
+	response := actionRequest(h, "/api/actions/counter.increment", `{}`, &http.Cookie{Name: "__Host-session", Value: "valid"}, nil)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("rejection response = %d: %s", response.Code, response.Body)
+	}
+}
+
+func TestActionAdmissionLimits(t *testing.T) {
+	t.Run("per IP", func(t *testing.T) {
+		f := newFakeAuth()
+		f.sessions["valid"] = "alice"
+		s := New(f, Options{Actions: &fakeActionService{}})
+		s.actionUser.max = maxActionsPerIP + 1
+		h := s.Handler()
+		cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
+		for i := 0; i < maxActionsPerIP; i++ {
+			if response := actionRequest(h, "/api/action-requests/counter.increment", "", cookie, nil); response.Code != http.StatusOK {
+				t.Fatalf("request %d: status = %d", i, response.Code)
+			}
+		}
+		response := actionRequest(h, "/api/action-requests/counter.increment", "", cookie, nil)
+		if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), `"code":"rate_limited"`) {
+			t.Fatalf("rate-limited response = %d: %s", response.Code, response.Body)
+		}
+	})
+
+	t.Run("per player", func(t *testing.T) {
+		f := newFakeAuth()
+		f.sessions["valid"] = "alice"
+		h := New(f, Options{Actions: &fakeActionService{}}).Handler()
+		cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
+		for i := 0; i < maxActionsPerPlayer; i++ {
+			ip := "198.51.100." + strconv.Itoa(i+1) + ":4000"
+			response := actionRequest(h, "/api/action-requests/counter.increment", "", cookie,
+				func(r *http.Request) { r.RemoteAddr = ip })
+			if response.Code != http.StatusOK {
+				t.Fatalf("request %d: status = %d", i, response.Code)
+			}
+		}
+		response := actionRequest(h, "/api/action-requests/counter.increment", "", cookie,
+			func(r *http.Request) { r.RemoteAddr = "203.0.113.99:4000" })
+		if response.Code != http.StatusTooManyRequests || !strings.Contains(response.Body.String(), `"code":"rate_limited"`) {
+			t.Fatalf("rate-limited response = %d: %s", response.Code, response.Body)
+		}
+	})
+
+	t.Run("global concurrency", func(t *testing.T) {
+		f := newFakeAuth()
+		s := New(f, Options{Actions: &fakeActionService{}})
+		for i := 0; i < cap(s.actionSlots); i++ {
+			s.actionSlots <- struct{}{}
+		}
+		response := actionRequest(s.Handler(), "/api/action-requests/counter.increment", "", nil, nil)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"code":"server_busy"`) {
+			t.Fatalf("busy response = %d: %s", response.Code, response.Body)
+		}
+	})
 }

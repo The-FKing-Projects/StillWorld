@@ -95,6 +95,10 @@ func (l *limiter) finish(e *entry, failed, reset bool) {
 	}
 }
 
+func (l *limiter) finishCounted(e *entry) {
+	l.finish(e, true, false)
+}
+
 func (l *limiter) purge(now time.Time) {
 	for len(l.expirations) > 0 && !now.Before(l.expirations[0].resetAt) {
 		e := heap.Pop(&l.expirations).(*entry)
