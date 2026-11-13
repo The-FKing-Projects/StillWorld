@@ -10,9 +10,6 @@ minimal visuals. Players are expected to take asynchronous actions that spend
 from a shared action-point pool called **Turns**. Turns represent action costs,
 not rounds of turn-based combat.
 
-Era of Darkness is a future game that may use StillWorld; that possibility is
-not a commitment or a description of a finished game.
-
 ## Status
 
 StillWorld is in its early stages. Accounts, server-side sessions, experimental
@@ -41,7 +38,6 @@ limits and does not change the project's public-deployment readiness status.
 
 ## Clean-room development
 
-StillWorld is being developed independently. Other games may inform broad
-genre-level ideas only; the project does not use or derive code, schemas,
-templates, prose, or implementation details from the old Era of Darkness
-repository or any leaked source.
+StillWorld is developed independently. Other games may inform broad
+genre-level ideas only; do not derive code, schemas, templates, prose, assets,
+or implementation details from material you are not licensed to use.

@@ -8,7 +8,7 @@ Status: draft. These are design decisions, not a finished specification.
   in a single database. Hosting multiple worlds is out of scope for now.
 - **Turns regenerate over time.** Each player's Turns accrue at a fixed rate up
   to a cap. Each game configures its own rate and cap. Turns are action costs,
-  not rounds of turn-based combat.
+  not rounds of turn-based combat. New accounts start at the configured cap.
 - **Regeneration is computed on demand.** The database stores a player's
   balance and the time it was last updated. The current value is derived when
   read, so no background job ticks every player.

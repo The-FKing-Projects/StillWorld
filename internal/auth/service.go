@@ -50,16 +50,30 @@ type Service struct {
 	params Params
 	Now    func() time.Time
 
-	dummyHash string
+	initialTurns int64
+	dummyHash    string
 }
 
 // NewService returns a Service using DefaultParams and the system clock.
 func NewService(db *sql.DB) (*Service, error) {
-	return newService(db, DefaultParams)
+	return newServiceWithInitialTurns(db, DefaultParams, 0)
+}
+
+// NewServiceWithInitialTurns returns a Service whose new accounts start with
+// the supplied nonnegative Turns balance.
+func NewServiceWithInitialTurns(db *sql.DB, initialTurns int64) (*Service, error) {
+	if initialTurns < 0 {
+		return nil, errors.New("auth: initial Turns must be nonnegative")
+	}
+	return newServiceWithInitialTurns(db, DefaultParams, initialTurns)
 }
 
 func newService(db *sql.DB, params Params) (*Service, error) {
-	s := &Service{DB: db, params: params, Now: time.Now}
+	return newServiceWithInitialTurns(db, params, 0)
+}
+
+func newServiceWithInitialTurns(db *sql.DB, params Params, initialTurns int64) (*Service, error) {
+	s := &Service{DB: db, params: params, Now: time.Now, initialTurns: initialTurns}
 	if err := s.init(); err != nil {
 		return nil, err
 	}
@@ -99,9 +113,9 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 	}
 	var id int64
 	err = s.DB.QueryRowContext(ctx,
-		`INSERT INTO accounts (username, email, password_hash, turns_updated_at)
-		 VALUES ($1, $2, $3, $4) RETURNING id`,
-		username, emailArg, hash, s.Now()).Scan(&id)
+		`INSERT INTO accounts (username, email, password_hash, turns_balance, turns_updated_at)
+		 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		username, emailArg, hash, s.initialTurns, s.Now()).Scan(&id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

@@ -77,6 +77,18 @@ func TestAppMigrateAndHandlerReadiness(t *testing.T) {
 	if err := app.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	accountID, err := app.auth.Register(context.Background(), "starter", "", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var initialTurns int64
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT turns_balance::bigint FROM accounts WHERE id = $1`, accountID).Scan(&initialTurns); err != nil {
+		t.Fatal(err)
+	}
+	if initialTurns != testOptions().Turns.Cap {
+		t.Fatalf("new account starts with %d Turns, want cap %d", initialTurns, testOptions().Turns.Cap)
+	}
 	handler, err := app.Handler(context.Background())
 	if err != nil {
 		t.Fatal(err)

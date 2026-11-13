@@ -88,7 +88,7 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	authService, err := auth.NewService(database)
+	authService, err := auth.NewServiceWithInitialTurns(database, options.Turns.Cap)
 	if err != nil {
 		return nil, err
 	}

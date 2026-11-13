@@ -35,8 +35,7 @@ uses Go `internal` packages; those packages cannot already be imported by a
 separate downstream repository.
 
 StillWorld does not prescribe a setting, theme, or specific game entities.
-Era of Darkness is planned as a separate private downstream game with its
-own rules, content, and presentation.
+Downstream games own their rules, content, and presentation.
 
 ## Public Go integration boundary
 

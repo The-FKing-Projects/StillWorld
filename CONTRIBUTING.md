@@ -10,13 +10,10 @@ contribution is your own original work, or that you have the right to submit it
 under the project's license.
 
 Do not submit code, schemas, templates, prose, assets, or implementation details
-derived from:
+derived from leaked or otherwise unauthorized material, or from any source you
+are not licensed to use.
 
-- the old Era of Darkness repository;
-- leaked source code, including leaked Kings of Chaos source; or
-- any other material you are not licensed to use.
-
-Other games may inspire broad, genre-level ideas only. If you are unsure whether
+Other games may inform broad, genre-level ideas only. If you are unsure whether
 something is acceptable, ask in an issue before submitting it.
 
 ## Developer Certificate of Origin (DCO)
