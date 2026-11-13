@@ -15,6 +15,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/actiondata"
 	"github.com/The-FKing-Projects/StillWorld/internal/actionengine"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
+	"github.com/The-FKing-Projects/StillWorld/presentation"
 )
 
 // Authenticator is the account and session behaviour the HTTP layer needs.
@@ -41,6 +42,8 @@ type Options struct {
 	Now func() time.Time
 	// Actions enables the authenticated action API.
 	Actions ActionService
+	// Presentation enables the optional server-rendered game interface.
+	Presentation presentation.Game
 }
 
 const (
@@ -113,6 +116,13 @@ func (s *Server) Handler() http.Handler {
 	if s.actions != nil {
 		mux.HandleFunc("POST /api/action-requests/{actionName}", s.handleIssueActionRequest)
 		mux.HandleFunc("POST /api/actions/{actionName}", s.handleAction)
+	}
+	if s.opts.Presentation != nil && s.actions != nil {
+		mux.HandleFunc("GET /{$}", s.handleHTMLHome)
+		mux.HandleFunc("GET /login", s.handleHTMLLogin)
+		mux.HandleFunc("GET /signup", s.handleHTMLSignup)
+		mux.HandleFunc("POST /actions/{actionName}", s.handleHTMLAction)
+		mux.HandleFunc("GET /actions/results/{nonce}", s.handleHTMLResult)
 	}
 	return s.protect(mux)
 }
@@ -193,14 +203,18 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	_, err := s.auth.Register(r.Context(), r.PostFormValue("username"), r.PostFormValue("email"), r.PostFormValue("password"))
 	switch {
 	case err == nil:
+		if s.htmlForm(r) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		fmt.Fprintln(w, "account created")
 	case errors.Is(err, auth.ErrInvalidInput):
-		http.Error(w, strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)
+		s.authError(w, r, "signup", strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)
 	case errors.Is(err, auth.ErrUsernameTaken):
-		http.Error(w, "username already taken", http.StatusConflict)
+		s.authError(w, r, "signup", "username already taken", http.StatusConflict)
 	case errors.Is(err, auth.ErrEmailTaken):
-		http.Error(w, "email already in use", http.StatusConflict)
+		s.authError(w, r, "signup", "email already in use", http.StatusConflict)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -237,9 +251,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		s.setCookie(w, token, int(auth.IdleTimeout/time.Second))
+		if s.htmlForm(r) {
+			http.Redirect(w, r, "/", http.StatusSeeOther)
+			return
+		}
 		fmt.Fprintln(w, "logged in")
 	case errors.Is(err, auth.ErrInvalidCredentials):
-		http.Error(w, "invalid username or password", http.StatusUnauthorized)
+		s.authError(w, r, "login", "invalid username or password", http.StatusUnauthorized)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -253,6 +271,10 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.setCookie(w, "", -1)
+	if s.opts.Presentation != nil && r.FormValue("_html") == "1" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
 	fmt.Fprintln(w, "logged out")
 }
 

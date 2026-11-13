@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,7 @@ var (
 	ErrUnknownAccount   = errors.New("action engine: unknown account")
 	ErrRequestConflict  = errors.New("action engine: request ID conflicts with a prior request")
 	ErrOutcomeUnknown   = errors.New("action engine: action outcome unknown; retry with the same request ID")
+	ErrOutcomeNotFound  = errors.New("action engine: action outcome not found")
 )
 
 // RequestID contains a signed request token and its database-derived expiry.
@@ -49,6 +51,7 @@ type Outcome struct {
 	Status    string            `json:"status"`
 	Result    json.RawMessage   `json:"result,omitempty"`
 	Rejection *action.Rejection `json:"rejection,omitempty"`
+	Nonce     string            `json:"-"`
 }
 
 // Engine owns action execution, Turns accounting, and request outcomes.
@@ -110,6 +113,30 @@ func (e *Engine) IssueRequestID(ctx context.Context, playerID int64, actionName 
 		return RequestID{}, fmt.Errorf("issue request ID: %w", err)
 	}
 	return RequestID{Token: token, ExpiresAt: claims.ExpiresAt}, nil
+}
+
+// CurrentTurns calculates the authenticated player's spendable Turns.
+func (e *Engine) CurrentTurns(ctx context.Context, playerID int64) (int64, error) {
+	if e == nil || playerID <= 0 {
+		return 0, ErrUnknownAccount
+	}
+	ctx, cancel := context.WithTimeout(ctx, actionDeadline)
+	defer cancel()
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin Turns read: %w", err)
+	}
+	if err := setActionTimeouts(ctx, tx); err != nil {
+		return 0, rollback(tx, fmt.Errorf("set Turns read timeouts: %w", err))
+	}
+	balance, err := e.turns.Current(ctx, tx, playerID)
+	if err != nil {
+		return 0, rollback(tx, fmt.Errorf("read current Turns: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit Turns read: %w", err)
+	}
+	return balance, nil
 }
 
 // CleanupExpired deletes expired outcomes in a bounded batch. It locks account
@@ -254,6 +281,7 @@ func (e *Engine) Execute(
 		if err := tx.Commit(); err != nil {
 			return Outcome{}, fmt.Errorf("finish duplicate action transaction: %w", err)
 		}
+		outcome.value.Nonce = hex.EncodeToString(claims.Nonce[:])
 		return outcome.value, nil
 	}
 
@@ -302,7 +330,7 @@ func (e *Engine) Execute(
 		return Outcome{}, rollback(tx, fmt.Errorf("validate action result: %w", err))
 	}
 
-	value := Outcome{Version: outcomeVersion, Status: "success", Result: append(json.RawMessage(nil), result...)}
+	value := Outcome{Version: outcomeVersion, Status: "success", Result: append(json.RawMessage(nil), result...), Nonce: hex.EncodeToString(claims.Nonce[:])}
 	if err := insertOutcome(ctx, tx, playerID, actionName, claims, fingerprint, value); err != nil {
 		return Outcome{}, rollback(tx, fmt.Errorf("record action success: %w", err))
 	}
@@ -334,6 +362,7 @@ func (e *Engine) commitRejection(
 		Version:   outcomeVersion,
 		Status:    "rejected",
 		Rejection: &action.Rejection{Code: rejection.Code, Message: rejection.Message},
+		Nonce:     hex.EncodeToString(claims.Nonce[:]),
 	}
 	if err := insertOutcome(ctx, tx, playerID, actionName, claims, fingerprint, value); err != nil {
 		return Outcome{}, rollback(tx, fmt.Errorf("record action rejection: %w", err))
@@ -351,7 +380,9 @@ type storedOutcome struct {
 	value       Outcome
 }
 
-func loadOutcome(ctx context.Context, tx *sql.Tx, playerID int64, nonce [16]byte) (storedOutcome, bool, error) {
+func loadOutcome(ctx context.Context, tx interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, playerID int64, nonce [16]byte) (storedOutcome, bool, error) {
 	var stored storedOutcome
 	var status string
 	var result []byte
@@ -399,6 +430,36 @@ func loadOutcome(ctx context.Context, tx *sql.Tx, playerID int64, nonce [16]byte
 		return storedOutcome{}, false, fmt.Errorf("invalid stored action status %q", status)
 	}
 	return stored, true, nil
+}
+
+// Result retrieves an unexpired committed outcome belonging to the player.
+func (e *Engine) Result(ctx context.Context, playerID int64, nonceText string) (string, Outcome, error) {
+	if e == nil || playerID <= 0 || len(nonceText) != 32 {
+		return "", Outcome{}, ErrOutcomeNotFound
+	}
+	raw, err := hex.DecodeString(nonceText)
+	if err != nil || hex.EncodeToString(raw) != nonceText {
+		return "", Outcome{}, ErrOutcomeNotFound
+	}
+	var nonce [16]byte
+	copy(nonce[:], raw)
+	ctx, cancel := context.WithTimeout(ctx, actionDeadline)
+	defer cancel()
+	stored, found, err := loadOutcome(ctx, e.db, playerID, nonce)
+	if err != nil {
+		return "", Outcome{}, fmt.Errorf("load action result: %w", err)
+	}
+	if !found {
+		return "", Outcome{}, ErrOutcomeNotFound
+	}
+	now, err := e.databaseTime(ctx)
+	if err != nil {
+		return "", Outcome{}, fmt.Errorf("read database time: %w", err)
+	}
+	if !now.Before(stored.expiresAt) {
+		return "", Outcome{}, ErrOutcomeNotFound
+	}
+	return stored.actionName, stored.value, nil
 }
 
 func insertOutcome(

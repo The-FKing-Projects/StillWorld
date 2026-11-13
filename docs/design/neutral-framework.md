@@ -3,10 +3,10 @@
 Status: initial implementation contract. The public `action` contract, an
 initial PostgreSQL action engine, JSON HTTP adapter, app-composition API, and
 coordinated game migration runner exist, but no game is configured by the main
-executable. The separate-module counter example demonstrates the public API.
+executable. The separate-module counter and relay examples demonstrate the public API.
 These decisions are not yet a stable API. Internal Turns arithmetic is implemented
-separately; see [Turns API](turns.md). The text-interface decisions are
-specified below; their implementation remains future work.
+separately; see [Turns API](turns.md). Relay demonstrates the initial
+server-rendered text interface described below.
 
 ## Shared foundation
 
@@ -575,6 +575,12 @@ screens and low-bandwidth connections. Render action results with normal
 `html/template` escaping. Actions return data, never HTML or template
 fragments.
 
+The initial implementation uses a shared framework HTML shell; a game
+supplies its page text, action descriptions, form decoding, and result text
+through the public `presentation` package. Relay uses actions without
+game-specific fields; the counter example demonstrates an integer input.
+Additional form controls and game-owned templates are not yet supported.
+
 Provide server-rendered `GET /login` and `GET /signup` pages whose ordinary
 forms submit to the existing `POST /login` and `POST /signup` endpoints. Logout
 is a same-origin `POST /logout` form; `/me` remains the authenticated account
@@ -701,10 +707,10 @@ Implementation does not imply a stable API or a production-ready game.
 - Turns accounting and atomic spending are implemented internally (#20),
   including regeneration arithmetic, fractional balances, and policy-change
   semantics. The initial public app configuration accepts the game's policy.
-- The text-interface decisions above specify HTML forms, the JSON API, result
-  presentation, and safe retry UX. The authenticated JSON action API is
-  implemented; HTML forms, player-facing routes, and result presentation
-  remain future work.
+- The initial HTML and JSON interfaces use the same action engine, persisted
+  outcomes, authentication, and admission controls. Relay demonstrates
+  server-rendered forms; the counter example demonstrates integer input.
+  Additional form fields and presentation remain future work.
 - Deployment guidance (#22) and authentication limitations (#23) are
   documented; the in-memory rate limiter and lack of admin tooling remain
   known operational limitations.
@@ -715,6 +721,6 @@ The current code implements account authentication, PostgreSQL migrations,
 internal Turns regeneration and spending, the initial action contract and
 engine, an optional authenticated JSON action API, public app composition,
 coordinated game migrations, and bounded expired-outcome cleanup. The
-separate-module counter example is implemented and its tests pass. Player-facing
-HTML routes and result presentation remain future work. PostgreSQL-backed
-action and migration tests pass against a disposable local database.
+separate-module counter and Relay examples demonstrate the integration boundary.
+PostgreSQL-backed action and migration tests pass against a disposable local
+database.

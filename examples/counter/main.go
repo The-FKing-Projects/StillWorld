@@ -66,6 +66,7 @@ func run() error {
 		RequestTokenActiveKey: "v1",
 		RequestTokenKeys:      map[string][]byte{"v1": key},
 		InsecureCookies:       true,
+		Presentation:          counterPresentation{database: database},
 	})
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)

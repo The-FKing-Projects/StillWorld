@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 	"testing"
 
 	"github.com/The-FKing-Projects/StillWorld/action"
@@ -20,6 +21,35 @@ func TestIncrementActionPreparation(t *testing.T) {
 	}
 	if prepared.Cost != 3 || prepared.Apply == nil {
 		t.Fatalf("prepared action = %+v", prepared)
+	}
+}
+
+func TestCounterFormDecoding(t *testing.T) {
+	game := counterPresentation{}
+	for _, tc := range []struct {
+		name   string
+		fields url.Values
+		want   string
+	}{
+		{name: "counter.increment", fields: url.Values{"amount": {"3"}}, want: `{"amount":3}`},
+		{name: "counter.increment", fields: url.Values{"amount": {"003"}}, want: `{"amount":3}`},
+		{name: "counter.increment", fields: url.Values{"amount": {"0"}}},
+		{name: "counter.increment", fields: url.Values{"amount": {"101"}}},
+		{name: "counter.increment", fields: url.Values{"amount": {"1.5"}}},
+		{name: "counter.increment", fields: url.Values{"amount": {"999999999999999999999999"}}},
+		{name: "counter.increment", fields: url.Values{"amount": {"1", "2"}}},
+		{name: "counter.increment", fields: url.Values{"amount": {"1"}, "extra": {"2"}}},
+		{name: "counter.increment", fields: url.Values{}},
+		{name: "counter.unknown", fields: url.Values{"amount": {"1"}}},
+	} {
+		got, err := game.DecodeForm(tc.name, tc.fields)
+		if tc.want == "" {
+			if err == nil {
+				t.Errorf("accepted %s %v", tc.name, tc.fields)
+			}
+		} else if err != nil || string(got) != tc.want {
+			t.Errorf("DecodeForm(%s, %v) = %s, %v; want %s", tc.name, tc.fields, got, err, tc.want)
+		}
 	}
 }
 

@@ -6,9 +6,9 @@ a shared chain of signal stations. Completing a station unlocks the next one.
 The game owns its actions, tables, migration, and executable; StillWorld owns
 accounts, sessions, Turns, request IDs, and action transactions.
 
-This example intentionally exposes a small JSON API rather than a player-facing
-HTML interface. It uses only the public StillWorld module and `action` package;
-it does not import any `internal` package.
+The server-rendered interface works without JavaScript, and a JSON API remains
+available for clients. The game uses only public StillWorld packages; it does
+not import any `internal` package.
 
 ## Run locally
 
@@ -27,11 +27,17 @@ The server binds to `127.0.0.1:8082` by default. Local development uses HTTP
 only when `STILLWORLD_INSECURE_COOKIES=true`; production must use HTTPS and
 secure cookies. Migrations are explicit, and serving refuses a schema that
 does not match the game registered by this executable.
+Open `http://127.0.0.1:8082/` to create an account and play.
 
 New accounts start with the game's configured 20-Turn cap. Turns regenerate
 one every 30 minutes. Salvaging costs one Turn and adds one component to the
 player's pack, up to five. Repairing costs two Turns and two components, and
 advances the shared active station by one step.
+
+The HTML forms use the same authenticated action pipeline as the API. A
+completed submission redirects to a player-scoped saved result. If the
+outcome is uncertain, use the retry button to resend the original request;
+do not start a new action until its outcome is understood.
 
 ## API loop
 
@@ -67,6 +73,11 @@ curl -b cookies.txt -c cookies.txt \
 Use `relay.repair` in the same request-ID flow to contribute two components to
 the current station. Share `/api/world` with other players to track collective
 progress.
+
+`presentation.go` implements the optional public `presentation.Game`
+interface. The framework authenticates the player and issues form request IDs;
+the game supplies page content, decodes action fields, and formats result text.
+It never uses a client-supplied player ID as authentication.
 
 ## Checks
 

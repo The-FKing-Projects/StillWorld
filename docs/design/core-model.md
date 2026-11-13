@@ -40,6 +40,6 @@ Status: draft. These are design decisions, not a finished specification.
   policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup
   locking, and the action locking, retry, and duplicate-request implementation.
-- Implementation of the documented HTML forms, player-facing routes, and
-  result pages; the authenticated JSON action API exists as an initial
-  implementation.
+- Extend the initial HTML forms and result presentation as games need richer
+  inputs and views; the Relay example demonstrates the shared HTML and JSON
+  action pipeline.

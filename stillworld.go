@@ -18,6 +18,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/db"
 	"github.com/The-FKing-Projects/StillWorld/internal/turns"
 	"github.com/The-FKing-Projects/StillWorld/internal/web"
+	"github.com/The-FKing-Projects/StillWorld/presentation"
 )
 
 // Registration binds a stable game action name to its implementation.
@@ -49,6 +50,8 @@ type Options struct {
 	InsecureCookies bool
 	BehindProxy     bool
 	Now             func() time.Time
+	// Presentation enables the optional server-rendered game interface.
+	Presentation presentation.Game
 }
 
 // App owns the framework services for one database and one game.
@@ -98,7 +101,7 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	return &App{
 		database:   database,
 		gameID:     game.ID,
-		http:       web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now},
+		http:       web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation},
 		auth:       authService,
 		action:     engine,
 		migrations: game.Migrations,

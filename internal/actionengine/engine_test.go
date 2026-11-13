@@ -46,6 +46,26 @@ func TestExecuteAndReplaySuccess(t *testing.T) {
 	if first.Status != "success" || second.Status != "success" || string(first.Result) != string(second.Result) {
 		t.Fatalf("outcomes differ: first=%+v second=%+v", first, second)
 	}
+	if len(first.Nonce) != 32 || first.Nonce != second.Nonce {
+		t.Fatalf("result nonce differs: first=%q second=%q", first.Nonce, second.Nonce)
+	}
+	name, saved, err := engine.Result(context.Background(), playerID, first.Nonce)
+	if err != nil || name != "counter.increment" || string(saved.Result) != string(first.Result) {
+		t.Fatalf("saved outcome = %q %+v %v", name, saved, err)
+	}
+	if _, _, err := engine.Result(context.Background(), playerID+1, first.Nonce); !errors.Is(err, ErrOutcomeNotFound) {
+		t.Fatalf("another player read result: %v", err)
+	}
+	if _, _, err := engine.Result(context.Background(), playerID, "INVALID"); !errors.Is(err, ErrOutcomeNotFound) {
+		t.Fatalf("invalid result nonce: %v", err)
+	}
+	if _, err := d.ExecContext(context.Background(),
+		`UPDATE stillworld_action_outcomes SET expires_at = clock_timestamp() - interval '1 second' WHERE account_id = $1`, playerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := engine.Result(context.Background(), playerID, first.Nonce); !errors.Is(err, ErrOutcomeNotFound) {
+		t.Fatalf("expired result = %v", err)
+	}
 	if applyCalls.Load() != 1 {
 		t.Fatalf("Apply called %d times, want 1", applyCalls.Load())
 	}

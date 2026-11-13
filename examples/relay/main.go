@@ -136,6 +136,7 @@ func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCook
 		RequestTokenKeys:      map[string][]byte{"v1": key},
 		InsecureCookies:       insecureCookies,
 		BehindProxy:           behindProxy,
+		Presentation:          relayPresentation{database: database},
 	})
 }
 

@@ -16,7 +16,8 @@ StillWorld is in its early stages. Accounts, server-side sessions, experimental
 HTTP authentication, PostgreSQL migrations, internal Turns accounting, and an
 initial action contract, execution engine, JSON API, public composition API,
 and coordinated game migrations are implemented as early foundations. There is
-not yet a configured production game or player-facing game interface. The
+not yet a configured production game. The Relay example has a minimal
+server-rendered player interface and is not production-ready. The
 PostgreSQL-backed action and composed-migration tests pass against a disposable
 local database. This is not a feature-complete system.
 
