@@ -24,16 +24,16 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		http.Error(w, "signup temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	select {
+	case s.recoverySlots <- struct{}{}:
+	default:
+		log.Print("signup delivery capacity exhausted")
+		s.deferredSignupResult(w, r, http.StatusServiceUnavailable, "Email delivery is busy. Try again.")
+		return
+	}
 	code, address, err := service.StartPendingSignup(r.Context(), r.PostFormValue("username"), email, r.PostFormValue("password"))
 	switch {
 	case err == nil:
-		select {
-		case s.recoverySlots <- struct{}{}:
-		default:
-			log.Print("signup delivery capacity exhausted")
-			s.deferredSignupResult(w, r, http.StatusServiceUnavailable, "Email delivery is busy. Try again.")
-			return
-		}
 		go func() {
 			defer func() { <-s.recoverySlots }()
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -44,12 +44,16 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		}()
 		s.deferredSignupResult(w, r, http.StatusOK, "If this address can be used, we will send a code to complete signup. Check your email.")
 	case errors.Is(err, auth.ErrPendingSignupUnavailable):
+		<-s.recoverySlots
 		s.deferredSignupResult(w, r, http.StatusOK, "If this address can be used, we will send a code to complete signup. Check your email.")
 	case errors.Is(err, auth.ErrInvalidInput):
+		<-s.recoverySlots
 		s.authError(w, r, "signup", strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)
 	case errors.Is(err, auth.ErrUsernameTaken):
+		<-s.recoverySlots
 		s.authError(w, r, "signup", "username already taken", http.StatusConflict)
 	default:
+		<-s.recoverySlots
 		log.Print("deferred signup failed")
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}

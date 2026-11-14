@@ -707,20 +707,23 @@ func TestSharedActionLimits(t *testing.T) {
 	f := newFakeAuth()
 	f.sessions["valid"] = "alice"
 	first := New(f, Options{Actions: &fakeActionService{}, SharedRateLimits: database})
-	first.actionUser.max = maxActionsPerIP + 1
 	second := New(f, Options{Actions: &fakeActionService{}, SharedRateLimits: database})
-	second.actionUser.max = maxActionsPerIP + 1
+	first.actionIP.max = maxActionsPerPlayer + 1
+	second.actionIP.max = maxActionsPerPlayer + 1
 	cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
-	for i := 0; i < maxActionsPerIP; i++ {
+	for i := 0; i < maxActionsPerPlayer; i++ {
 		handler := first.Handler()
 		if i%2 == 1 {
 			handler = second.Handler()
 		}
-		if response := actionRequest(handler, "/api/action-requests/counter.increment", "", cookie, nil); response.Code != http.StatusOK {
+		ip := "198.51.100." + strconv.Itoa(i+1) + ":4000"
+		if response := actionRequest(handler, "/api/action-requests/counter.increment", "", cookie,
+			func(r *http.Request) { r.RemoteAddr = ip }); response.Code != http.StatusOK {
 			t.Fatalf("shared request %d: status = %d", i, response.Code)
 		}
 	}
-	if response := actionRequest(second.Handler(), "/api/action-requests/counter.increment", "", cookie, nil); response.Code != http.StatusTooManyRequests {
-		t.Fatalf("shared action quota = %d", response.Code)
+	if response := actionRequest(second.Handler(), "/api/action-requests/counter.increment", "", cookie,
+		func(r *http.Request) { r.RemoteAddr = "203.0.113.99:4000" }); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("shared player quota = %d", response.Code)
 	}
 }
