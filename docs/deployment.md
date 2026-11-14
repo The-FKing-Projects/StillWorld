@@ -186,6 +186,10 @@ environment variables:
 | Failed logins per client IP | 20 failures per 15-minute window |
 | Failed logins per case-insensitive username | 10 failures per 15-minute window |
 | Signup requests per client IP | 5 per hour |
+| Password recovery requests per client IP | 10 per hour |
+| Password recovery requests per email address | 1 per 10 minutes |
+| Concurrent recovery delivery attempts | 16; excess attempts are dropped and logged |
+| Password reset submissions per client IP | 20 per 15 minutes |
 
 These limits are per-process and in memory: they are not shared across servers
 or persisted in PostgreSQL, and restart with the process. Successful login
@@ -240,8 +244,8 @@ the password; do not put a password in shell arguments, logs, or scripts. A
 successful reset revokes that account's existing sessions. Requests already
 authenticated before the reset may still finish. If the command reports an
 unknown outcome, retry with the same password; do not assume the reset failed.
-This is an administrative recovery mechanism, not an email-based self-service
-reset; independently verify the account owner's identity before using it.
+This is an administrative recovery mechanism; independently verify the account
+owner's identity before using it.
 
 Use `stillworld disable-account USERNAME` to prevent login and revoke existing
 sessions, and `stillworld enable-account USERNAME` to allow login again.
@@ -251,6 +255,57 @@ check `list-accounts` before retrying. Apply the latest framework migrations
 using the appropriate game migration command before deploying this version.
 Stop older application instances before using these controls: older versions
 do not enforce the disabled status.
+
+## Optional password recovery
+
+Self-service recovery is disabled by default. To enable it in the main server
+or either example, add these settings to the protected service environment:
+
+```ini
+STILLWORLD_RECOVERY_ORIGIN=https://play.example.net
+STILLWORLD_SMTP_ADDRESS=mail.example.net:587
+STILLWORLD_SMTP_FROM=noreply@example.net
+STILLWORLD_SMTP_MODE=starttls
+STILLWORLD_SMTP_USERNAME=YOUR_SMTP_USERNAME
+STILLWORLD_SMTP_PASSWORD=YOUR_SMTP_PASSWORD
+```
+
+Use the real public HTTPS origin without a path; it is used instead of the
+request's `Host` to construct reset links. Plain HTTP origins are permitted
+only for loopback development, and must match the server's cookie/CSRF scheme.
+The counter example always uses development cookies, so its recovery origin
+must be a loopback HTTP origin.
+SMTP uses verified TLS 1.2 or newer. `starttls` is the default; set the mode to
+`tls` for implicit TLS. Username and password must either both be set or both
+be omitted. The origin, SMTP address, and sender are required when any
+recovery setting is supplied. Protect the SMTP credentials like the database
+credential. A custom game may instead provide a `recovery.Config` and its own
+`recovery.Sender` to `stillworld.Options`; that sender must protect its own
+transport and honor context cancellation.
+
+The HTML game interface links to the recovery forms; the main server also
+serves these forms when recovery is enabled. API clients may submit
+form-encoded `email` to `POST /forgot-password`, and `code`, `password`, and
+`confirm_password` to `POST /reset-password`, subject to the same origin
+protections as other state-changing requests. Codes are sent in the email body,
+not the link; they expire after 30 minutes and are single-use. A successful
+reset revokes existing sessions. Requests already authenticated may still
+finish. If the result is unknown, try the new password or request another
+code rather than assuming it failed.
+
+Request responses are generic for eligible and ineligible addresses. Delivery
+is asynchronous and best effort: limits, capacity, process shutdown, mail
+failures, or a full mailbox can prevent delivery. A newer code invalidates an
+older one. Monitor logs for recovery issuance, delivery, and capacity failures;
+logs intentionally omit addresses and codes. Limits are per-process and may
+prevent repeated requests for the same address for 10 minutes, including when
+delivery fails. They are not shared across instances or durable across
+restarts. The generic response and limits do not guarantee resistance to
+enumeration or abuse, especially since signup currently reveals email
+conflicts. Signup does not verify email addresses: anyone controlling a
+registered address can reset that account, so do not enable recovery unless
+that trust model is acceptable. Accounts without email, disabled accounts, and
+accounts unable to receive mail require administrator assistance.
 
 ## Backups and restore checks
 

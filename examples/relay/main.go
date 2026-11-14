@@ -20,6 +20,7 @@ import (
 
 	"github.com/The-FKing-Projects/StillWorld"
 	"github.com/The-FKing-Projects/StillWorld/action"
+	"github.com/The-FKing-Projects/StillWorld/recovery"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -53,6 +54,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil || len(key) < 32 {
 		return errors.New("RELAY_REQUEST_KEY must be at least 32 bytes encoded as hexadecimal")
 	}
+	recoveryConfig, err := recovery.FromEnv()
+	if err != nil {
+		return err
+	}
 	insecureCookies, err := boolEnv("STILLWORLD_INSECURE_COOKIES")
 	if err != nil {
 		return err
@@ -73,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	defer database.Close()
 	database.SetMaxOpenConns(10)
 
-	app, err := newApplication(database, migrations, key, insecureCookies, behindProxy)
+	app, err := newApplication(database, migrations, key, insecureCookies, behindProxy, recoveryConfig)
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)
 	}
@@ -122,7 +127,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCookies, behindProxy bool) (*stillworld.App, error) {
+func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCookies, behindProxy bool, recoveryConfig *recovery.Config) (*stillworld.App, error) {
 	return stillworld.New(database, stillworld.Game{
 		ID:         "relay",
 		Migrations: migrations,
@@ -137,6 +142,7 @@ func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCook
 		InsecureCookies:       insecureCookies,
 		BehindProxy:           behindProxy,
 		Presentation:          relayPresentation{database: database},
+		Recovery:              recoveryConfig,
 	})
 }
 

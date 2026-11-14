@@ -16,6 +16,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/actionengine"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
 	"github.com/The-FKing-Projects/StillWorld/presentation"
+	"github.com/The-FKing-Projects/StillWorld/recovery"
 )
 
 // Authenticator is the account and session behaviour the HTTP layer needs.
@@ -44,6 +45,8 @@ type Options struct {
 	Actions ActionService
 	// Presentation enables the optional server-rendered game interface.
 	Presentation presentation.Game
+	// Recovery enables optional password recovery.
+	Recovery *recovery.Config
 }
 
 const (
@@ -65,17 +68,21 @@ const (
 
 // Server serves the HTTP API.
 type Server struct {
-	auth        Authenticator
-	opts        Options
-	actions     ActionService
-	hashSlots   chan struct{}
-	loginIP     *limiter
-	loginUser   *limiter
-	signupIP    *limiter
-	actionIP    *limiter
-	actionUser  *limiter
-	actionSlots chan struct{}
-	cookieName  string
+	auth          Authenticator
+	opts          Options
+	actions       ActionService
+	hashSlots     chan struct{}
+	loginIP       *limiter
+	loginUser     *limiter
+	signupIP      *limiter
+	actionIP      *limiter
+	actionUser    *limiter
+	actionSlots   chan struct{}
+	recoveryIP    *limiter
+	recoveryEmail *limiter
+	resetIP       *limiter
+	recoverySlots chan struct{}
+	cookieName    string
 }
 
 // New returns a Server.
@@ -89,17 +96,21 @@ func New(a Authenticator, opts Options) *Server {
 		name = "session"
 	}
 	return &Server{
-		auth:        a,
-		opts:        opts,
-		hashSlots:   make(chan struct{}, maxConcurrentHashes),
-		loginIP:     newLimiter(maxLoginFailsIP, loginWindow, opts.Now),
-		loginUser:   newLimiter(maxLoginFailsID, loginWindow, opts.Now),
-		signupIP:    newLimiter(maxSignupsIP, signupWindow, opts.Now),
-		actionIP:    newLimiter(maxActionsPerIP, time.Minute, opts.Now),
-		actionUser:  newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
-		actionSlots: make(chan struct{}, maxConcurrentActions),
-		actions:     opts.Actions,
-		cookieName:  name,
+		auth:          a,
+		opts:          opts,
+		hashSlots:     make(chan struct{}, maxConcurrentHashes),
+		loginIP:       newLimiter(maxLoginFailsIP, loginWindow, opts.Now),
+		loginUser:     newLimiter(maxLoginFailsID, loginWindow, opts.Now),
+		signupIP:      newLimiter(maxSignupsIP, signupWindow, opts.Now),
+		actionIP:      newLimiter(maxActionsPerIP, time.Minute, opts.Now),
+		actionUser:    newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
+		actionSlots:   make(chan struct{}, maxConcurrentActions),
+		recoveryIP:    newLimiter(10, time.Hour, opts.Now),
+		recoveryEmail: newLimiter(1, 10*time.Minute, opts.Now),
+		resetIP:       newLimiter(20, 15*time.Minute, opts.Now),
+		recoverySlots: make(chan struct{}, 16),
+		actions:       opts.Actions,
+		cookieName:    name,
 	}
 }
 
@@ -113,6 +124,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /me", s.handleMe)
+	if s.opts.Recovery != nil {
+		mux.HandleFunc("POST /forgot-password", s.handleForgotPassword)
+		mux.HandleFunc("POST /reset-password", s.handleResetPassword)
+		mux.HandleFunc("GET /forgot-password", s.handleHTMLForgotPassword)
+		mux.HandleFunc("GET /reset-password", s.handleHTMLResetPassword)
+	}
 	if s.actions != nil {
 		mux.HandleFunc("POST /api/action-requests/{actionName}", s.handleIssueActionRequest)
 		mux.HandleFunc("POST /api/actions/{actionName}", s.handleAction)

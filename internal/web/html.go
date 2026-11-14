@@ -43,6 +43,9 @@ type htmlPage struct {
 	Forms       []htmlForm
 	AuthKind    string
 	Message     string
+	Recovery    bool
+	NoGame      bool
+	ResetDone   bool
 	RetryAction string
 	RetryFields url.Values
 }
@@ -60,16 +63,29 @@ button{font:inherit;font-weight:650;background:#17584d;color:white;border:2px so
 button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outline-offset:3px}
 .notice{border:1px solid #536a64;padding:1rem;background:#fff}.actions{display:flex;flex-wrap:wrap;gap:1.5rem}.actions form{flex:1 1 15rem}
 .logout{display:inline}.logout button{background:transparent;color:#fff;border-color:#fff;margin-left:1rem}
-</style></head><body><header><a href="/">Game home</a>{{if .Username}} <span>Signed in as {{.Username}}</span>
+</style></head><body><header>{{if .NoGame}}StillWorld{{else}}<a href="/">Game home</a>{{end}}{{if .Username}} <span>Signed in as {{.Username}}</span>
 <form class="logout" method="post" action="/logout"><input type="hidden" name="_html" value="1"><button type="submit">Sign out</button></form>{{end}}</header>
 <main><h1>{{.Title}}</h1>{{if .Description}}<p>{{.Description}}</p>{{end}}{{if .Turns}}<p><strong>Available Turns:</strong> {{.Turns}}</p>{{end}}
 {{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
 {{if .AuthKind}}<form method="post" action="/{{.AuthKind}}"><input type="hidden" name="_html" value="1">
+{{if eq .AuthKind "forgot-password"}}
+<label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254">
+<p><button type="submit">Send reset code</button></p>
+{{else if eq .AuthKind "reset-password"}}
+<label for="code">Reset code</label><input id="code" name="code" autocomplete="off" required maxlength="43">
+<label for="password">New password</label><input id="password" name="password" type="password" autocomplete="new-password" required minlength="8">
+<label for="confirm_password">Confirm new password</label><input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required minlength="8">
+<p><button type="submit">Change password</button></p>
+{{else}}
 <label for="username">Username</label><input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
 {{if eq .AuthKind "signup"}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email">{{end}}
 <label for="password">Password</label><input id="password" name="password" type="password" {{if eq .AuthKind "signup"}}autocomplete="new-password"{{else}}autocomplete="current-password"{{end}} required minlength="8">
-<p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p></form>
-{{if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>{{else}}<p>New here? <a href="/signup">Create an account</a>.</p>{{end}}{{end}}
+<p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p>{{end}}</form>
+{{if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>
+{{else if eq .AuthKind "login"}}<p>New here? <a href="/signup">Create an account</a>.</p>{{if .Recovery}}<p><a href="/forgot-password">Forgot your password?</a></p>{{end}}
+{{else if eq .AuthKind "forgot-password"}}<p>Already have a code? <a href="/reset-password">Reset your password</a>.</p>{{if not .NoGame}}<p><a href="/login">Return to sign in</a></p>{{end}}
+{{else}}<p><a href="/forgot-password">Request a new code</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}{{end}}
+{{if and .Recovery (not .AuthKind)}}<p>{{if .ResetDone}}<a href="/forgot-password">Request a new code</a>{{else}}<a href="/reset-password">Enter a reset code</a>{{end}}{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}
 {{range .Sections}}<section><h2>{{.Heading}}</h2><ul>{{range .Lines}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
 {{if .Forms}}<section><h2>Actions</h2><div class="actions">{{range .Forms}}{{$action := .Action}}<form method="post" action="/actions/{{.Action}}">
 <input type="hidden" name="request_id" value="{{.RequestID}}"><p>{{.Description}}</p>{{range .Numbers}}
@@ -77,7 +93,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <p><button type="submit">{{.Label}}</button></p></form>{{end}}</div></section>{{end}}
 {{if .RetryAction}}<form method="post" action="/actions/{{.RetryAction}}">{{range $name,$values := .RetryFields}}{{range $values}}<input type="hidden" name="{{$name}}" value="{{.}}">{{end}}{{end}}
 <button type="submit">Retry the original action</button></form>{{end}}
-{{if and (not .AuthKind) (not .Forms)}}<p><a href="/">Return to the game</a></p>{{end}}
+{{if and (not .AuthKind) (not .Forms) (not .Recovery)}}<p><a href="/">Return to the game</a></p>{{end}}
 </main></body></html>`))
 
 var formFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -120,7 +136,7 @@ func (s *Server) authError(w http.ResponseWriter, r *http.Request, kind, message
 		http.Error(w, message, status)
 		return
 	}
-	renderHTML(w, status, htmlPage{Title: authTitle(kind), AuthKind: kind, Message: message})
+	renderHTML(w, status, htmlPage{Title: authTitle(kind), AuthKind: kind, Message: message, Recovery: s.opts.Recovery != nil})
 }
 
 func authTitle(kind string) string {
@@ -131,11 +147,19 @@ func authTitle(kind string) string {
 }
 
 func (s *Server) handleHTMLLogin(w http.ResponseWriter, _ *http.Request) {
-	renderHTML(w, http.StatusOK, htmlPage{Title: "Sign in", AuthKind: "login"})
+	renderHTML(w, http.StatusOK, htmlPage{Title: "Sign in", AuthKind: "login", Recovery: s.opts.Recovery != nil})
 }
 
 func (s *Server) handleHTMLSignup(w http.ResponseWriter, _ *http.Request) {
 	renderHTML(w, http.StatusOK, htmlPage{Title: "Create an account", AuthKind: "signup"})
+}
+
+func (s *Server) handleHTMLForgotPassword(w http.ResponseWriter, _ *http.Request) {
+	renderHTML(w, http.StatusOK, htmlPage{Title: "Forgot your password?", Description: "Enter the email address on your account. We will send a reset code if the account is eligible.", AuthKind: "forgot-password", Recovery: true, NoGame: s.recoveryNoGame()})
+}
+
+func (s *Server) handleHTMLResetPassword(w http.ResponseWriter, _ *http.Request) {
+	renderHTML(w, http.StatusOK, htmlPage{Title: "Reset password", Description: "Enter the code from your email and choose a new password.", AuthKind: "reset-password", Recovery: true, NoGame: s.recoveryNoGame()})
 }
 
 func (s *Server) htmlAccount(w http.ResponseWriter, r *http.Request) (auth.Account, bool) {

@@ -19,6 +19,7 @@ import (
 
 	"github.com/The-FKing-Projects/StillWorld"
 	"github.com/The-FKing-Projects/StillWorld/action"
+	"github.com/The-FKing-Projects/StillWorld/recovery"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -42,6 +43,10 @@ func run() error {
 	key, err := hex.DecodeString(os.Getenv("COUNTER_REQUEST_KEY"))
 	if err != nil || len(key) < 32 {
 		return errors.New("COUNTER_REQUEST_KEY must be at least 32 bytes encoded as hexadecimal")
+	}
+	recoveryConfig, err := recovery.FromEnv()
+	if err != nil {
+		return err
 	}
 	migrations, err := fs.Sub(embeddedMigrations, "migrations")
 	if err != nil {
@@ -67,6 +72,7 @@ func run() error {
 		RequestTokenKeys:      map[string][]byte{"v1": key},
 		InsecureCookies:       true,
 		Presentation:          counterPresentation{database: database},
+		Recovery:              recoveryConfig,
 	})
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)

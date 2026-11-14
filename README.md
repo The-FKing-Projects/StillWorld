@@ -21,8 +21,10 @@ server-rendered player interface and is not production-ready. The
 PostgreSQL-backed action and composed-migration tests pass against a disposable
 local database. This is not a feature-complete system.
 
-Password recovery has an internal token foundation, but email delivery and
-player-facing self-service reset are not implemented.
+Optional email-based password recovery is available for accounts with an email
+address. It is disabled until configured; see the
+[deployment guide](docs/deployment.md#optional-password-recovery) for setup and
+limitations.
 
 The HTTP endpoints are experimental and are not yet ready for public
 deployment. State-changing requests must include a matching `Origin`,

@@ -40,9 +40,10 @@ Status: draft. These are design decisions, not a finished specification.
 
 ## Still open
 
-- Email delivery, abuse controls, enumeration resistance, and the player-facing
-  password reset flow remain unimplemented; recovery tokens are not exposed by
-  HTTP. Target-host Argon2id parameters also remain open.
+- Self-service password recovery is optional and uses email codes, bounded
+  in-process admission, and generic request responses. Email addresses are not
+  verified at signup, and these controls do not establish comprehensive
+  enumeration or abuse resistance. Target-host Argon2id parameters remain open.
 - Main-executable configuration for choosing a downstream game and its Turns
   policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup

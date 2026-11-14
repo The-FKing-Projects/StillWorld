@@ -16,6 +16,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/config"
 	"github.com/The-FKing-Projects/StillWorld/internal/db"
 	"github.com/The-FKing-Projects/StillWorld/internal/web"
+	"github.com/The-FKing-Projects/StillWorld/recovery"
 )
 
 const version = "0.0.0-dev"
@@ -67,6 +68,17 @@ func serve(stderr io.Writer) int {
 		fmt.Fprintln(stderr, "stillworld:", err)
 		return 1
 	}
+	recoveryConfig, err := recovery.FromEnv()
+	if err != nil {
+		fmt.Fprintln(stderr, "stillworld:", err)
+		return 1
+	}
+	if recoveryConfig != nil {
+		if err := recoveryConfig.ValidateForCookies(cfg.InsecureCookies); err != nil {
+			fmt.Fprintln(stderr, "stillworld:", err)
+			return 1
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -86,7 +98,7 @@ func serve(stderr io.Writer) int {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           web.New(svc, web.Options{InsecureCookies: cfg.InsecureCookies, BehindProxy: cfg.BehindProxy}).Handler(),
+		Handler:           web.New(svc, web.Options{InsecureCookies: cfg.InsecureCookies, BehindProxy: cfg.BehindProxy, Recovery: recoveryConfig}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

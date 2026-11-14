@@ -47,7 +47,7 @@ func TestTwoPlayersRestoreSharedRelayNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := newApplication(database, migrations, bytes.Repeat([]byte{0x42}, 32), true, false)
+	app, err := newApplication(database, migrations, bytes.Repeat([]byte{0x42}, 32), true, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

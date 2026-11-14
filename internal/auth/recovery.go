@@ -20,25 +20,33 @@ var (
 // IssueResetToken issues a single-use token to a trusted delivery component.
 // Callers must not expose whether the email is eligible for recovery.
 func (s *Service) IssueResetToken(ctx context.Context, email string) (string, error) {
+	token, _, err := s.IssueResetTokenForDelivery(ctx, email)
+	return token, err
+}
+
+// IssueResetTokenForDelivery also returns the stored address, so delivery does
+// not rely on the casing supplied by an unauthenticated requester.
+func (s *Service) IssueResetTokenForDelivery(ctx context.Context, email string) (string, string, error) {
 	if email == "" || len(email) > maxEmailLen {
-		return "", ErrRecoveryUnavailable
+		return "", "", ErrRecoveryUnavailable
 	}
 	token, err := newToken()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return "", fmt.Errorf("begin reset token issuance: %w", err)
+		return "", "", fmt.Errorf("begin reset token issuance: %w", err)
 	}
 	var id int64
-	err = tx.QueryRowContext(ctx, `SELECT id FROM accounts
-		WHERE lower(email) = lower($1) AND disabled_at IS NULL FOR UPDATE`, email).Scan(&id)
+	var storedEmail string
+	err = tx.QueryRowContext(ctx, `SELECT id, email FROM accounts
+		WHERE lower(email) = lower($1) AND disabled_at IS NULL FOR UPDATE`, email).Scan(&id, &storedEmail)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", rollbackAuth(tx, ErrRecoveryUnavailable)
+		return "", "", rollbackAuth(tx, ErrRecoveryUnavailable)
 	}
 	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("lock account for reset token: %w", err))
+		return "", "", rollbackAuth(tx, fmt.Errorf("lock account for reset token: %w", err))
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO password_reset_tokens (account_id, token_hash, expires_at)
 		VALUES ($1, $2, clock_timestamp() + $3 * interval '1 second')
@@ -46,12 +54,12 @@ func (s *Service) IssueResetToken(ctx context.Context, email string) (string, er
 		SET token_hash = EXCLUDED.token_hash, expires_at = EXCLUDED.expires_at`,
 		id, hashToken(token), int64(resetTokenLifetime.Seconds()))
 	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("store reset token: %w", err))
+		return "", "", rollbackAuth(tx, fmt.Errorf("store reset token: %w", err))
 	}
 	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit reset token issuance; request a new token: %w", err)
+		return "", "", fmt.Errorf("commit reset token issuance; request a new token: %w", err)
 	}
-	return token, nil
+	return token, storedEmail, nil
 }
 
 // RedeemResetToken consumes a valid token, replaces the password, and revokes

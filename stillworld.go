@@ -19,6 +19,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/turns"
 	"github.com/The-FKing-Projects/StillWorld/internal/web"
 	"github.com/The-FKing-Projects/StillWorld/presentation"
+	"github.com/The-FKing-Projects/StillWorld/recovery"
 )
 
 // Registration binds a stable game action name to its implementation.
@@ -52,6 +53,8 @@ type Options struct {
 	Now             func() time.Time
 	// Presentation enables the optional server-rendered game interface.
 	Presentation presentation.Game
+	// Recovery enables opt-in self-service password recovery.
+	Recovery *recovery.Config
 }
 
 // App owns the framework services for one database and one game.
@@ -72,6 +75,11 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	}
 	if game.Migrations == nil {
 		return nil, errors.New("stillworld: game migrations are required")
+	}
+	if options.Recovery != nil {
+		if err := options.Recovery.ValidateForCookies(options.InsecureCookies); err != nil {
+			return nil, err
+		}
 	}
 	keyRing, err := actiontoken.NewKeyRing(options.RequestTokenActiveKey, options.RequestTokenKeys)
 	if err != nil {
@@ -101,7 +109,7 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	return &App{
 		database:   database,
 		gameID:     game.ID,
-		http:       web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation},
+		http:       web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation, Recovery: options.Recovery},
 		auth:       authService,
 		action:     engine,
 		migrations: game.Migrations,
