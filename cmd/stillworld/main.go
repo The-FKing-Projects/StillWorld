@@ -53,8 +53,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return changeAccountStatus(fs.Args()[1:], false, stdout, stderr)
 	case "enable-account":
 		return changeAccountStatus(fs.Args()[1:], true, stdout, stderr)
+	case "revoke-sessions":
+		return revokeSessions(fs.Args()[1:], stdout, stderr)
 	case "":
-		fmt.Fprintln(stderr, "stillworld: available commands: migrate, serve, benchmark-password, reset-password, list-accounts, disable-account, enable-account")
+		fmt.Fprintln(stderr, "stillworld: available commands: migrate, serve, benchmark-password, reset-password, list-accounts, disable-account, enable-account, revoke-sessions")
 		return 1
 	default:
 		fmt.Fprintf(stderr, "stillworld: unknown command %q\n", fs.Arg(0))

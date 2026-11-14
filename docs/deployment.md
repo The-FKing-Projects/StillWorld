@@ -256,6 +256,14 @@ using the appropriate game migration command before deploying this version.
 Stop older application instances before using these controls: older versions
 do not enforce the disabled status.
 
+To sign an account out without changing its password or status, run
+`stillworld revoke-sessions USERNAME`. This revokes its current sessions, but
+does not invalidate recovery codes or prevent new logins; a concurrent login
+may also create a session after revocation. Already authenticated requests may
+still finish. If the result is unknown, retry only if revoking any new sessions
+is acceptable. If credentials or recovery codes may be compromised, reset the
+password or disable the account instead.
+
 ## Optional password recovery
 
 Self-service recovery is disabled by default. To enable it in the main server

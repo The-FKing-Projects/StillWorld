@@ -37,6 +37,7 @@ var (
 	ErrAccountNotFound      = errors.New("auth: account not found")
 	ErrResetOutcomeUnknown  = errors.New("auth: password reset outcome unknown; retry with the same password")
 	ErrAccountStatusUnknown = errors.New("auth: account status outcome unknown; inspect the account before retrying")
+	ErrRevokeOutcomeUnknown = errors.New("auth: session revocation outcome unknown; retry if revoking newly created sessions is acceptable")
 
 	usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 )
@@ -226,6 +227,34 @@ func (s *Service) ResetPassword(ctx context.Context, username, password string) 
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: commit password reset: %w", ErrResetOutcomeUnknown, err)
+	}
+	return nil
+}
+
+// RevokeSessions removes an account's current sessions without changing its
+// password, status, or recovery tokens. New logins may create new sessions.
+func (s *Service) RevokeSessions(ctx context.Context, username string) error {
+	if !usernamePattern.MatchString(username) {
+		return fmt.Errorf("%w: invalid username", ErrInvalidInput)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin session revocation: %w", err)
+	}
+	var id int64
+	err = tx.QueryRowContext(ctx, `SELECT id FROM accounts
+		WHERE lower(username) = lower($1) FOR UPDATE`, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return rollbackAuth(tx, ErrAccountNotFound)
+	}
+	if err != nil {
+		return rollbackAuth(tx, fmt.Errorf("lock account for session revocation: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("revoke sessions: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: commit session revocation: %w", ErrRevokeOutcomeUnknown, err)
 	}
 	return nil
 }
