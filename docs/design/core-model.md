@@ -44,9 +44,11 @@ Status: draft. These are design decisions, not a finished specification.
 
 ## Still open
 
-- Recovery and verification use bounded admission (in memory by default or
-  shared through PostgreSQL) and generic request responses; these controls do
-  not establish comprehensive enumeration or abuse resistance. Remaining
+- Password recovery and email verification use bounded admission (in memory by
+  default or shared through PostgreSQL). Recovery request responses are generic
+  for eligible and ineligible addresses; verification is signed-in and returns a
+  distinct message when the account has no unverified address. These controls
+  do not establish comprehensive enumeration or abuse resistance. Remaining
   authentication and rate-limit remediations are tracked in issue #23
   (documenting a limitation is not the same as remediating it).
 - Target-host Argon2id latency, memory, and concurrency budgets remain
