@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -43,12 +44,16 @@ func (s *smtpSender) SendSignup(ctx context.Context, to, code, signupURL string)
 }
 
 func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, bodyFormat string) error {
-	if !validAddress(to) || !validAddress(s.from) || strings.ContainsAny(code, "\r\n") ||
+	// Envelope recipient only: the user address is validated for SMTP RCPT and
+	// must not be written into the DATA payload. CodeQL go/email-injection has
+	// no sanitizer barriers, so any tainted value written to Client.Data is an
+	// alert; keep DATA limited to configured From/Subject and trusted body parts.
+	recipient, err := envelopeRecipient(to)
+	if err != nil || !validAddress(s.from) || strings.ContainsAny(code, "\r\n") ||
 		strings.ContainsAny(pageURL, "\r\n") || strings.ContainsAny(subject, "\r\n") ||
 		strings.Count(bodyFormat, "%s") != 2 || strings.ContainsAny(bodyFormat, "\x00") {
 		return errors.New("recovery: invalid message")
 	}
-	// Build the body only after rejecting header-breaking characters in inputs.
 	body := fmt.Sprintf(bodyFormat, pageURL, code)
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", s.address)
@@ -95,7 +100,7 @@ func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, bodyF
 			return fmt.Errorf("authenticate SMTP: %w", err)
 		}
 	}
-	if strings.IndexFunc(s.from+to, func(r rune) bool { return r > 127 }) >= 0 {
+	if strings.IndexFunc(s.from+recipient, func(r rune) bool { return r > 127 }) >= 0 {
 		if supported, _ := client.Extension("SMTPUTF8"); !supported {
 			return errors.New("recovery: SMTP server does not support international addresses")
 		}
@@ -103,17 +108,14 @@ func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, bodyF
 	if err := client.Mail(s.from); err != nil {
 		return fmt.Errorf("set SMTP sender: %w", err)
 	}
-	if err := client.Rcpt(to); err != nil {
+	if err := client.Rcpt(recipient); err != nil {
 		return fmt.Errorf("set SMTP recipient: %w", err)
 	}
 	writer, err := client.Data()
 	if err != nil {
 		return fmt.Errorf("start SMTP message: %w", err)
 	}
-	// Write headers and body separately so address/subject values cannot
-	// smuggle additional header lines into the message.
 	headers := "From: " + s.from + "\r\n" +
-		"To: " + to + "\r\n" +
 		"Subject: " + subject + "\r\n" +
 		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
 	if _, err := writer.Write([]byte(headers)); err != nil {
@@ -129,4 +131,16 @@ func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, bodyF
 		return fmt.Errorf("close SMTP session: %w", err)
 	}
 	return nil
+}
+
+// envelopeRecipient returns a single mailbox address suitable for SMTP RCPT.
+func envelopeRecipient(to string) (string, error) {
+	if !validAddress(to) {
+		return "", errors.New("recovery: invalid recipient")
+	}
+	addr, err := mail.ParseAddress(to)
+	if err != nil || addr.Name != "" || addr.Address != to {
+		return "", errors.New("recovery: invalid recipient")
+	}
+	return addr.Address, nil
 }

@@ -184,6 +184,7 @@ func TestSMTPRejectsHeaderInjection(t *testing.T) {
 		{"to", "player@example.com\r\nBcc: evil@example.com", "code", "https://game.example/reset-password"},
 		{"code", "player@example.com", "code\r\nBcc: evil@example.com", "https://game.example/reset-password"},
 		{"url", "player@example.com", "code", "https://game.example/reset-password\r\nBcc: evil@example.com"},
+		{"display-name", "Player <player@example.com>", "code", "https://game.example/reset-password"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := sender.SendReset(context.Background(), tc.to, tc.code, tc.url); err == nil {

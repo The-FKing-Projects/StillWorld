@@ -68,7 +68,9 @@ func TestEmailVerificationMigrationInvalidatesLegacyResetCodes(t *testing.T) {
 		(SELECT count(*) FROM password_reset_tokens) FROM accounts WHERE username = 'legacy'`).Scan(&verified, &tokens); err != nil || verified || tokens != 0 {
 		t.Fatalf("legacy verification=%v tokens=%d: %v", verified, tokens, err)
 	}
-	if _, err := provider.Down(ctx); err == nil {
+	// Migration 00009 (pending signups) can roll back freely; 00008 must not
+	// while accounts still have email addresses.
+	if _, err := provider.DownTo(ctx, 7); err == nil {
 		t.Fatal("downgrade allowed removal of verification with stored addresses")
 	}
 }
