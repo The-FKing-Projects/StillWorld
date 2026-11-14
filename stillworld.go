@@ -55,7 +55,7 @@ type Options struct {
 	Presentation presentation.Game
 	// Recovery enables opt-in self-service password recovery.
 	Recovery *recovery.Config
-	// SharedRateLimits stores authentication rate limits in the application database.
+	// SharedRateLimits stores authentication and action rate limits in the application database.
 	SharedRateLimits bool
 }
 

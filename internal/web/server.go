@@ -49,7 +49,7 @@ type Options struct {
 	Presentation presentation.Game
 	// Recovery enables optional password recovery.
 	Recovery *recovery.Config
-	// SharedRateLimits stores authentication admission limits in PostgreSQL.
+	// SharedRateLimits stores authentication and action admission limits in PostgreSQL.
 	SharedRateLimits *sql.DB
 }
 
@@ -65,7 +65,6 @@ const (
 
 	loginWindow     = 15 * time.Minute
 	maxLoginFailsIP = 20
-	maxLoginFailsID = 10
 	signupWindow    = time.Hour
 	maxSignupsIP    = 5
 )
@@ -77,10 +76,10 @@ type Server struct {
 	actions              ActionService
 	hashSlots            chan struct{}
 	loginIP              *authLimiter
-	loginUser            *authLimiter
 	signupIP             *authLimiter
-	actionIP             *limiter
-	actionUser           *limiter
+	completeSignupIP     *authLimiter
+	actionIP             *authLimiter
+	actionUser           *authLimiter
 	actionSlots          chan struct{}
 	recoveryIP           *authLimiter
 	recoveryEmail        *authLimiter
@@ -108,10 +107,10 @@ func New(a Authenticator, opts Options) *Server {
 		opts:                 opts,
 		hashSlots:            make(chan struct{}, maxConcurrentHashes),
 		loginIP:              newAuthLimiter(opts.SharedRateLimits, limitLoginIP, maxLoginFailsIP, loginWindow, opts.Now),
-		loginUser:            newAuthLimiter(opts.SharedRateLimits, limitLoginUser, maxLoginFailsID, loginWindow, opts.Now),
 		signupIP:             newAuthLimiter(opts.SharedRateLimits, limitSignupIP, maxSignupsIP, signupWindow, opts.Now),
-		actionIP:             newLimiter(maxActionsPerIP, time.Minute, opts.Now),
-		actionUser:           newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
+		completeSignupIP:     newAuthLimiter(opts.SharedRateLimits, limitCompleteSignupIP, 20, 15*time.Minute, opts.Now),
+		actionIP:             newAuthLimiter(opts.SharedRateLimits, limitActionIP, maxActionsPerIP, time.Minute, opts.Now),
+		actionUser:           newAuthLimiter(opts.SharedRateLimits, limitActionUser, maxActionsPerPlayer, time.Minute, opts.Now),
 		actionSlots:          make(chan struct{}, maxConcurrentActions),
 		recoveryIP:           newAuthLimiter(opts.SharedRateLimits, limitRecoveryIP, 10, time.Hour, opts.Now),
 		recoveryEmail:        newAuthLimiter(opts.SharedRateLimits, limitRecoveryEmail, 1, 10*time.Minute, opts.Now),
@@ -144,6 +143,8 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /verify-email", s.handleVerifyEmailPage)
 		mux.HandleFunc("POST /verify-email/request", s.handleVerifyEmailRequest)
 		mux.HandleFunc("POST /verify-email", s.handleVerifyEmail)
+		mux.HandleFunc("GET /complete-signup", s.handleCompleteSignupPage)
+		mux.HandleFunc("POST /complete-signup", s.handleCompleteSignup)
 	}
 	if s.actions != nil {
 		mux.HandleFunc("POST /api/action-requests/{actionName}", s.handleIssueActionRequest)
@@ -220,6 +221,11 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
+	email := strings.TrimSpace(r.PostFormValue("email"))
+	if email != "" && s.opts.Recovery == nil {
+		s.authError(w, r, "signup", "email signup requires email delivery configuration", http.StatusBadRequest)
+		return
+	}
 	if !s.acquire(r.Context()) {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
 		return
@@ -239,7 +245,11 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		rateLimitUnavailable(w, err)
 		return
 	}
-	_, err = s.auth.Register(r.Context(), r.PostFormValue("username"), r.PostFormValue("email"), r.PostFormValue("password"))
+	if email != "" {
+		s.handleDeferredSignup(w, r, email)
+		return
+	}
+	_, err = s.auth.Register(r.Context(), r.PostFormValue("username"), "", r.PostFormValue("password"))
 	switch {
 	case err == nil:
 		if s.htmlForm(r) {
@@ -252,8 +262,6 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		s.authError(w, r, "signup", strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)
 	case errors.Is(err, auth.ErrUsernameTaken):
 		s.authError(w, r, "signup", "username already taken", http.StatusConflict)
-	case errors.Is(err, auth.ErrEmailTaken):
-		s.authError(w, r, "signup", "email already in use", http.StatusConflict)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
@@ -265,7 +273,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ip := s.clientIP(r)
-	username := strings.ToLower(r.PostFormValue("username"))
 	if !s.acquire(r.Context()) {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
 		return
@@ -280,29 +287,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
 		return
 	}
-	userSlot, userErr := s.loginUser.reserve(r.Context(), username)
-	if userErr != nil {
-		if err := s.loginIP.finish(ipSlot, false, false); err != nil {
-			log.Print("authentication rate limit release failed")
-		}
-		rateLimitUnavailable(w, userErr)
-		return
-	}
-	if userSlot == nil {
-		if err := s.loginIP.finish(ipSlot, false, false); err != nil {
-			rateLimitUnavailable(w, err)
-			return
-		}
-		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
-		return
-	}
 
 	token, err := s.auth.Login(r.Context(), r.PostFormValue("username"), r.PostFormValue("password"))
 	failed := errors.Is(err, auth.ErrInvalidCredentials)
-	ipErr := s.loginIP.finish(ipSlot, failed, false)
-	userErr = s.loginUser.finish(userSlot, failed, err == nil)
-	if ipErr != nil || userErr != nil {
-		rateLimitUnavailable(w, errors.Join(ipErr, userErr))
+	if ipErr := s.loginIP.finish(ipSlot, failed, false); ipErr != nil {
+		rateLimitUnavailable(w, ipErr)
 		return
 	}
 	switch {

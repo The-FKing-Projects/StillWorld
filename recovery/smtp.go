@@ -30,9 +30,16 @@ func (s *smtpSender) SendReset(ctx context.Context, to, code, resetURL string) e
 
 func (s *smtpSender) SendVerification(ctx context.Context, to, code, verificationURL string) error {
 	body := fmt.Sprintf("Someone requested email verification for a StillWorld account.\r\n"+
-		"Sign in, open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
 		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", verificationURL, code)
 	return s.send(ctx, to, code, verificationURL, "StillWorld email verification", body)
+}
+
+func (s *smtpSender) SendSignup(ctx context.Context, to, code, signupURL string) error {
+	body := fmt.Sprintf("Complete your StillWorld account signup.\r\n"+
+		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", signupURL, code)
+	return s.send(ctx, to, code, signupURL, "StillWorld account signup", body)
 }
 
 func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, body string) error {
