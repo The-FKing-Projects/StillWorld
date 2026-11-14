@@ -39,8 +39,8 @@ Status: draft. These are design decisions, not a finished specification.
   Recovery codes are single-use and short-lived: the service stores only token
   hashes, keeps at most one 30-minute token per account, and atomically
   replaces the password and revokes sessions. An administrator's password
-  reset, session revocation, or account disable invalidates outstanding
-  tokens. Recovery requires a verified address.
+  reset or account disable invalidates outstanding tokens; session-only
+  revocation does not. Recovery requires a verified address.
 
 ## Still open
 
