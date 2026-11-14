@@ -159,26 +159,41 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", ErrInvalidCredentials
 	}
 
-	return s.createSession(ctx, id, hash)
+	return s.createSession(ctx, id, hash, password)
 }
 
-func (s *Service) createSession(ctx context.Context, id int64, verifiedHash string) (string, error) {
+func (s *Service) createSession(ctx context.Context, id int64, verifiedHash, password string) (string, error) {
 	token, err := newToken()
 	if err != nil {
 		return "", err
 	}
+	rehash := NeedsRehash(verifiedHash, s.params)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin session transaction: %w", err)
 	}
 	var currentHash string
 	// Serialize session creation with account changes, then recheck the verified hash.
-	err = tx.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR SHARE`, id).Scan(&currentHash)
+	// FOR UPDATE when rehashing so a concurrent reset cannot race the upgrade.
+	lockSQL := `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR SHARE`
+	if rehash {
+		lockSQL = `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`
+	}
+	err = tx.QueryRowContext(ctx, lockSQL, id).Scan(&currentHash)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && currentHash != verifiedHash) {
 		return "", rollbackAuth(tx, ErrInvalidCredentials)
 	}
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("lock account for login: %w", err))
+	}
+	if rehash {
+		newHash, herr := HashPassword(password, s.params)
+		if herr != nil {
+			return "", rollbackAuth(tx, fmt.Errorf("rehash password: %w", herr))
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, newHash, id); err != nil {
+			return "", rollbackAuth(tx, fmt.Errorf("store rehashed password: %w", err))
+		}
 	}
 	now := s.Now()
 	_, err = tx.ExecContext(ctx,

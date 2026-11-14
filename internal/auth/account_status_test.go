@@ -153,7 +153,7 @@ func TestLoginWaitsForDisableAndRejectsSession(t *testing.T) {
 	}
 	result := make(chan error, 1)
 	go func() {
-		_, err := s.createSession(ctx, id, hash)
+		_, err := s.createSession(ctx, id, hash, "password123")
 		result <- err
 	}()
 	waitForAccountLock(t, ctx, s.DB, pid, result)

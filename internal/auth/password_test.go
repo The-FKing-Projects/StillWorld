@@ -74,3 +74,31 @@ func TestVerifyUsesStoredParams(t *testing.T) {
 		t.Fatalf("ok=%v err=%v", ok, err)
 	}
 }
+
+func TestNeedsRehash(t *testing.T) {
+	current := Params{MemoryKiB: 32 * 1024, Iterations: 3, Parallelism: 2}
+	weaker, err := HashPassword("pw", Params{MemoryKiB: 8, Iterations: 1, Parallelism: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal, err := HashPassword("pw", current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stronger, err := HashPassword("pw", Params{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !NeedsRehash(weaker, current) {
+		t.Fatal("weaker hash should need rehash")
+	}
+	if NeedsRehash(equal, current) {
+		t.Fatal("equal hash should not need rehash")
+	}
+	if NeedsRehash(stronger, current) {
+		t.Fatal("stronger hash must not be downgraded")
+	}
+	if NeedsRehash("not-a-hash", current) {
+		t.Fatal("malformed encoding should not report NeedsRehash")
+	}
+}

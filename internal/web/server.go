@@ -56,8 +56,8 @@ type Options struct {
 const (
 	maxBodyBytes       int64 = 8 << 10
 	maxActionBodyBytes int64 = actiondata.MaxInputBytes
-	// maxConcurrentHashes bounds simultaneous Argon2id work, since each hash
-	// uses tens of MiB of memory.
+	// maxConcurrentHashes bounds simultaneous Argon2id work (issue #18 budget B:
+	// four slots at 32 MiB each ≈ 128 MiB peak hashing).
 	maxConcurrentHashes  = 4
 	maxConcurrentActions = 64
 	maxActionsPerIP      = 120

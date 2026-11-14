@@ -198,11 +198,14 @@ environment variables:
 
 By default, these limits are per-process and in memory: they are not shared
 across servers and restart with the process. The password-hash work uses
-Argon2id with 64 MiB per operation by default, so four simultaneous operations
-can consume about 256 MiB for hashing alone, in addition to PostgreSQL, the
-application, and the operating system. Load-test the target host and monitor
-resource use; do not treat these initial limits as a guarantee of
-public-service capacity or abuse resistance.
+Argon2id with 32 MiB per operation by default (3 iterations, 2 lanes), so four
+simultaneous operations can consume about 128 MiB for hashing alone, in
+addition to PostgreSQL, the application, and the operating system. These
+defaults follow the staging latency budget in issue #18 (roughly 250–400 ms
+per hash on a typical small host); re-measure with `stillworld
+benchmark-password` on the target host. Load-test and monitor resource use; do
+not treat these limits as a guarantee of public-service capacity or abuse
+resistance.
 
 For shared, restart-persistent login, signup, password recovery, email
 verification, and action IP/player limits, apply the latest migrations and set
@@ -224,16 +227,22 @@ experimental option. Keep the migration in place while any instance uses it.
 
 On the target host, the optional `stillworld benchmark-password` command
 measures password hashing without connecting to a database. It defaults to
-three sequential hashes with the current default parameters. For example,
-`stillworld benchmark-password -concurrency=4` measures batches of four
-simultaneous hashes, matching the server's current limit. Run it in a
-controlled environment: it consumes CPU and memory and can affect a running
-service. Use `-memory-kib`, `-iterations`, `-parallelism`, and `-samples` to
-compare settings; the command reports per-hash timings and estimated hashing
-memory. Measurements vary with load, and a few hundred milliseconds per hash
-is a starting target, not a security or capacity guarantee. The command does
-not change the application configuration; Argon2id parameters are currently
-compiled defaults. Do not lower them solely to hit a timing target.
+three sequential hashes with the current default parameters (32 MiB, 3
+iterations, 2 lanes). For example, `stillworld benchmark-password
+-concurrency=4` measures batches of four simultaneous hashes, matching the
+server's current limit. Run it in a controlled environment: it consumes CPU
+and memory and can affect a running service. Use `-memory-kib`,
+`-iterations`, `-parallelism`, and `-samples` to compare settings; the command
+reports per-hash timings and estimated hashing memory. Measurements vary with
+load, and a few hundred milliseconds per hash is the staging target from
+issue #18, not a security or capacity guarantee. The command does not change
+the application configuration; Argon2id parameters are compiled defaults. Do
+not lower them solely to hit a timing target.
+
+Successful logins rehash the stored password when the encoded parameters are
+weaker than the current defaults on memory, iterations, or parallelism.
+Stronger or equal hashes are left unchanged so a later cost reduction does not
+downgrade existing accounts.
 
 Login throttling is per client IP only, so a distributed attacker can still
 attempt many usernames from many addresses. Signup without an email creates an

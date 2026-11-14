@@ -19,8 +19,11 @@ type Params struct {
 	Parallelism uint8
 }
 
-// DefaultParams are conservative starting values; tune them to the host.
-var DefaultParams = Params{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2}
+// DefaultParams are the staging single-VPS budget (issue #18 option B):
+// about 250–400 ms per hash on a typical small host, 32 MiB per hash, with up
+// to four concurrent hash slots in the HTTP layer (~128 MiB peak hashing).
+// Re-measure with `stillworld benchmark-password` when retuning.
+var DefaultParams = Params{MemoryKiB: 32 * 1024, Iterations: 3, Parallelism: 2}
 
 const (
 	saltLen        = 16
@@ -59,34 +62,55 @@ func ValidParams(p Params) bool {
 // parameters are read from the hash, so old hashes keep working after the
 // defaults change.
 func VerifyPassword(password, encoded string) (bool, error) {
+	p, salt, want, err := decodeHash(encoded)
+	if err != nil {
+		return false, err
+	}
+	got := argon2.IDKey([]byte(password), salt, p.Iterations, p.MemoryKiB, p.Parallelism, uint32(len(want)))
+	return subtle.ConstantTimeCompare(got, want) == 1, nil
+}
+
+// NeedsRehash reports whether encoded uses parameters weaker than current on
+// any axis (memory, iterations, or parallelism). Stronger or equal hashes are
+// left alone so a retune that lowers cost does not downgrade existing hashes.
+func NeedsRehash(encoded string, current Params) bool {
+	p, _, _, err := decodeHash(encoded)
+	if err != nil {
+		return false
+	}
+	return p.MemoryKiB < current.MemoryKiB ||
+		p.Iterations < current.Iterations ||
+		p.Parallelism < current.Parallelism
+}
+
+func decodeHash(encoded string) (Params, []byte, []byte, error) {
 	if len(encoded) > 256 {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	var version int
 	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version || parts[2] != fmt.Sprintf("v=%d", version) {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	var p Params
 	var par uint32
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.MemoryKiB, &p.Iterations, &par); err != nil || par == 0 || par > 255 {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	p.Parallelism = uint8(par)
 	if !ValidParams(p) || parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", p.MemoryKiB, p.Iterations, p.Parallelism) {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
 	if err != nil || len(salt) != saltLen {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
 	want, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil || len(want) != keyLen {
-		return false, errInvalidHash
+		return Params{}, nil, nil, errInvalidHash
 	}
-	got := argon2.IDKey([]byte(password), salt, p.Iterations, p.MemoryKiB, p.Parallelism, uint32(len(want)))
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	return p, salt, want, nil
 }
