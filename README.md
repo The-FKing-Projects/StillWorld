@@ -1,3 +1,5 @@
+<img src="assets/stillworld-mark.svg" alt="StillWorld mark" width="96" height="96">
+
 # StillWorld
 
 An open-source foundation for persistent, text-first multiplayer strategy games.

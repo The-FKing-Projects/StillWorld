@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+  <title id="title">StillWorld mark</title>
+  <desc id="description">A circular world containing three lines of text.</desc>
+  <rect x="4" y="4" width="248" height="248" rx="50" fill="#173f3a" stroke="#8db7aa" stroke-width="4"/>
+  <circle cx="128" cy="128" r="72" fill="none" stroke="#eef3f1" stroke-width="8"/>
+  <g fill="#8db7aa">
+    <circle cx="88" cy="104" r="5"/>
+    <circle cx="88" cy="128" r="5"/>
+    <circle cx="88" cy="152" r="5"/>
+  </g>
+  <g fill="none" stroke="#eef3f1" stroke-width="8" stroke-linecap="round">
+    <path d="M108 104h53"/>
+    <path d="M108 128h40"/>
+    <path d="M108 152h48"/>
+  </g>
+</svg>
