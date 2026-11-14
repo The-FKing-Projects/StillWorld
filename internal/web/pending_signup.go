@@ -83,11 +83,7 @@ func (s *Server) handleCompleteSignup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	if !s.acquire(r.Context()) {
-		http.Error(w, "server busy", http.StatusServiceUnavailable)
-		return
-	}
-	defer s.release()
+	// Completion inserts a pre-hashed pending row; do not take Argon2 hash slots.
 	slot, err := s.completeSignupIP.reserve(r.Context(), s.clientIP(r))
 	if err != nil {
 		rateLimitUnavailable(w, err)

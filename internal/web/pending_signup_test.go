@@ -64,3 +64,47 @@ func TestDeferredSignupHidesEmailConflict(t *testing.T) {
 		t.Fatalf("completed signup login: %v", err)
 	}
 }
+
+func TestCompleteSignupDoesNotUseHashSlots(t *testing.T) {
+	database := testdb.Open(t)
+	service, err := auth.NewService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mails := make(chan resetMail, 1)
+	server := New(service, Options{
+		Recovery: &recovery.Config{PublicOrigin: "https://game.example", Sender: testSender{mails}},
+	})
+	handler := server.Handler()
+	if got := post(handler, "/signup", url.Values{
+		"username": {"finish"}, "email": {"finish@example.com"}, "password": {"password123"},
+	}, nil).Code; got != http.StatusOK {
+		t.Fatalf("signup = %d", got)
+	}
+	var code string
+	select {
+	case mail := <-mails:
+		code = mail.code
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected signup mail")
+	}
+	for i := 0; i < maxConcurrentHashes; i++ {
+		if !server.acquire(t.Context()) {
+			t.Fatal("failed to fill hash slots")
+		}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < maxConcurrentHashes; i++ {
+			server.release()
+		}
+	})
+	if got := post(handler, "/login", url.Values{"username": {"finish"}, "password": {"password123"}},
+		func(r *http.Request) { r.RemoteAddr = "198.51.100.30:1" }).Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("login with full hash slots = %d", got)
+	}
+	complete := post(handler, "/complete-signup", url.Values{"code": {code}},
+		func(r *http.Request) { r.RemoteAddr = "198.51.100.31:1" })
+	if complete.Code != http.StatusCreated {
+		t.Fatalf("complete signup with full hash slots = %d %s", complete.Code, complete.Body)
+	}
+}
