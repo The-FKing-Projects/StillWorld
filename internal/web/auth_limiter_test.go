@@ -198,7 +198,7 @@ func TestSharedLoginLimitsPersistAcrossServers(t *testing.T) {
 	authenticator.users["player"] = "password123"
 	first := New(authenticator, Options{SharedRateLimits: database}).Handler()
 	second := New(authenticator, Options{SharedRateLimits: database}).Handler()
-	for i := 0; i < maxLoginFailsID; i++ {
+	for i := 0; i < maxLoginFailsIP; i++ {
 		handler := first
 		if i%2 == 1 {
 			handler = second

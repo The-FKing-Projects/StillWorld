@@ -192,6 +192,9 @@ func cleanupOutcomes(ctx context.Context, app *stillworld.App, stderr io.Writer)
 			if _, err := app.CleanupExpiredOutcomes(ctx, 100); err != nil {
 				fmt.Fprintln(stderr, "relay: clean expired action outcomes:", err)
 			}
+			if _, err := app.CleanupExpiredPendingSignups(ctx, 100); err != nil {
+				fmt.Fprintln(stderr, "relay: clean expired pending signups:", err)
+			}
 		}
 	}
 }

@@ -20,7 +20,7 @@ type Config struct {
 	// BehindProxy trusts the rightmost X-Forwarded-For entry as the client IP.
 	// Enable only when a reverse proxy you control sets that header.
 	BehindProxy bool
-	// SharedRateLimits stores authentication limits in PostgreSQL.
+	// SharedRateLimits stores authentication and action limits in PostgreSQL.
 	SharedRateLimits bool
 }
 

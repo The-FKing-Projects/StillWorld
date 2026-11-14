@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"strconv"
 
 	"github.com/The-FKing-Projects/StillWorld/action"
 	"github.com/The-FKing-Projects/StillWorld/internal/actiondata"
@@ -91,14 +90,18 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <label for="password">New password</label><input id="password" name="password" type="password" autocomplete="new-password" required minlength="8">
 <label for="confirm_password">Confirm new password</label><input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" required minlength="8">
 <p><button type="submit">Change password</button></p>
+{{else if eq .AuthKind "complete-signup"}}
+<label for="code">Signup code</label><input id="code" name="code" autocomplete="off" required maxlength="43">
+<p><button type="submit">Complete signup</button></p>
 {{else}}
 <label for="username">Username</label><input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
-{{if eq .AuthKind "signup"}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email">{{if .Recovery}}<p>After signing in, verify your address to enable password recovery.</p>{{end}}{{end}}
+{{if eq .AuthKind "signup"}}{{if .Recovery}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email"><p>If you include an email, we send a code to finish signup and verify the address. Without an email, the account is created immediately.</p>{{end}}{{end}}
 <label for="password">Password</label><input id="password" name="password" type="password" {{if eq .AuthKind "signup"}}autocomplete="new-password"{{else}}autocomplete="current-password"{{end}} required minlength="8">
 <p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p>{{end}}</form>
 {{if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>
 {{else if eq .AuthKind "login"}}<p>New here? <a href="/signup">Create an account</a>.</p>{{if .Recovery}}<p><a href="/forgot-password">Forgot your password?</a></p>{{end}}
 {{else if eq .AuthKind "forgot-password"}}<p>Already have a code? <a href="/reset-password">Reset your password</a>.</p>{{if not .NoGame}}<p><a href="/login">Return to sign in</a></p>{{end}}
+{{else if eq .AuthKind "complete-signup"}}<p>Need a new code? <a href="/signup">Start signup again</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>
 {{else}}<p><a href="/forgot-password">Request a new code</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}{{end}}
 {{if and .Recovery (not .AuthKind)}}<p>{{if .ResetDone}}<a href="/forgot-password">Request a new code</a>{{else}}<a href="/reset-password">Enter a reset code</a>{{end}}{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}
 {{range .Sections}}<section><h2>{{.Heading}}</h2><ul>{{range .Lines}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
@@ -207,14 +210,14 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 		s.finishActionIP(ipSlot)
 		return
 	}
-	userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-	if userSlot == nil {
+	userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+	if status != 0 {
 		s.finishActionIP(ipSlot)
-		renderHTML(w, http.StatusTooManyRequests, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
+		renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 		return
 	}
 	page, err := s.opts.Presentation.Home(r.Context(), action.Player{ID: account.ID})
-	s.actionUser.finishCounted(userSlot)
+	s.finishActionUser(userSlot)
 	s.finishActionIP(ipSlot)
 	if err != nil {
 		log.Printf("render game home: %v", err)
@@ -233,14 +236,14 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 			renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 			return
 		}
-		userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-		if userSlot == nil {
+		userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+		if status != 0 {
 			s.finishActionIP(ipSlot)
-			renderHTML(w, http.StatusTooManyRequests, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
+			renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 			return
 		}
 		balance, err := reader.CurrentTurns(r.Context(), account.ID)
-		s.actionUser.finishCounted(userSlot)
+		s.finishActionUser(userSlot)
 		s.finishActionIP(ipSlot)
 		if err != nil {
 			log.Printf("read HTML player Turns: %v", err)
@@ -255,14 +258,14 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 			renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 			return
 		}
-		userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-		if userSlot == nil {
+		userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+		if status != 0 {
 			s.finishActionIP(ipSlot)
-			renderHTML(w, http.StatusTooManyRequests, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
+			renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 			return
 		}
 		token, err := s.actions.IssueRequestID(r.Context(), account.ID, form.Action)
-		s.actionUser.finishCounted(userSlot)
+		s.finishActionUser(userSlot)
 		s.finishActionIP(ipSlot)
 		if err != nil {
 			log.Printf("issue HTML action request: %v", err)
@@ -285,12 +288,12 @@ func (s *Server) handleHTMLAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-	if userSlot == nil {
-		renderHTML(w, http.StatusTooManyRequests, htmlPage{Title: "Please wait", Message: "Too many requests. Retry the original form."})
+	userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+	if status != 0 {
+		renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Retry the original form."})
 		return
 	}
-	defer s.actionUser.finishCounted(userSlot)
+	defer s.finishActionUser(userSlot)
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/x-www-form-urlencoded" {
 		renderHTML(w, http.StatusUnsupportedMediaType, htmlPage{Title: "Invalid form", Message: "Submit the action from the game page."})
@@ -369,12 +372,12 @@ func (s *Server) handleHTMLResult(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-	if userSlot == nil {
-		renderHTML(w, http.StatusTooManyRequests, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
+	userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+	if status != 0 {
+		renderHTML(w, status, htmlPage{Title: "Please wait", Message: "Too many requests. Try again later."})
 		return
 	}
-	defer s.actionUser.finishCounted(userSlot)
+	defer s.finishActionUser(userSlot)
 	service, ok := s.actions.(resultService)
 	if !ok {
 		renderHTML(w, http.StatusServiceUnavailable, htmlPage{Title: "Temporarily unavailable", Message: "Action results are unavailable."})

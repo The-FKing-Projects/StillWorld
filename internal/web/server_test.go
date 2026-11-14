@@ -16,6 +16,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/action"
 	"github.com/The-FKing-Projects/StillWorld/internal/actionengine"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
+	"github.com/The-FKing-Projects/StillWorld/internal/testdb"
 )
 
 type fakeAuth struct {
@@ -256,36 +257,10 @@ func TestResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestLoginRateLimitPerUsername(t *testing.T) {
-	now := time.Now()
-	f := newFakeAuth()
-	f.users["alice"] = "password123"
-	h := New(f, Options{Now: func() time.Time { return now }}).Handler()
-	bad := url.Values{"username": {"Alice"}, "password": {"wrong"}}
-
-	for i := 0; i < maxLoginFailsID; i++ {
-		// Vary the IP so only the per-username limit can trigger.
-		ip := "198.51.100." + string(rune('1'+i)) + ":1"
-		if w := post(h, "/login", bad, func(r *http.Request) { r.RemoteAddr = ip }); w.Code != http.StatusUnauthorized {
-			t.Fatalf("attempt %d: %d", i, w.Code)
-		}
-	}
-	good := url.Values{"username": {"alice"}, "password": {"password123"}}
-	if w := post(h, "/login", good, func(r *http.Request) { r.RemoteAddr = "192.0.2.9:1" }); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("locked out username: %d", w.Code)
-	}
-
-	now = now.Add(loginWindow + time.Second)
-	if w := post(h, "/login", good, func(r *http.Request) { r.RemoteAddr = "192.0.2.9:1" }); w.Code != http.StatusOK {
-		t.Fatalf("after window: %d", w.Code)
-	}
-}
-
 func TestLoginRateLimitPerIP(t *testing.T) {
 	f := newFakeAuth()
 	h := New(f, Options{}).Handler()
 	for i := 0; i < maxLoginFailsIP; i++ {
-		// A different username each time so only the IP limit can trigger.
 		form := url.Values{"username": {"user" + string(rune('a'+i))}, "password": {"x"}}
 		if w := post(h, "/login", form, nil); w.Code != http.StatusUnauthorized {
 			t.Fatalf("attempt %d: %d", i, w.Code)
@@ -300,20 +275,28 @@ func TestLoginRateLimitPerIP(t *testing.T) {
 	}
 }
 
-func TestSuccessfulLoginResetsUsernameCounter(t *testing.T) {
+func TestLoginDoesNotLockOutUsernameAcrossIPs(t *testing.T) {
 	f := newFakeAuth()
 	f.users["alice"] = "password123"
 	h := New(f, Options{}).Handler()
-	bad := url.Values{"username": {"alice"}, "password": {"wrong"}}
+	bad := url.Values{"username": {"Alice"}, "password": {"wrong"}}
+	for i := 0; i < maxLoginFailsIP; i++ {
+		ip := "198.51.100." + strconv.Itoa(i+1) + ":1"
+		if w := post(h, "/login", bad, func(r *http.Request) { r.RemoteAddr = ip }); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i, w.Code)
+		}
+	}
 	good := url.Values{"username": {"alice"}, "password": {"password123"}}
+	if w := post(h, "/login", good, func(r *http.Request) { r.RemoteAddr = "192.0.2.9:1" }); w.Code != http.StatusOK {
+		t.Fatalf("username lockout remains: %d", w.Code)
+	}
+}
 
-	for round := 0; round < 3; round++ {
-		for i := 0; i < maxLoginFailsID-1; i++ {
-			post(h, "/login", bad, func(r *http.Request) { r.RemoteAddr = "192.0.2." + string(rune('1'+i)) + ":1" })
-		}
-		if w := post(h, "/login", good, func(r *http.Request) { r.RemoteAddr = "192.0.2.99:1" }); w.Code != http.StatusOK {
-			t.Fatalf("round %d: %d", round, w.Code)
-		}
+func TestSignupRejectsEmailWithoutRecovery(t *testing.T) {
+	h := New(newFakeAuth(), Options{}).Handler()
+	form := url.Values{"username": {"alice"}, "email": {"alice@example.com"}, "password": {"password123"}}
+	if w := post(h, "/signup", form, nil); w.Code != http.StatusBadRequest {
+		t.Fatalf("email without recovery = %d %s", w.Code, w.Body)
 	}
 }
 
@@ -672,6 +655,7 @@ func TestActionAdmissionLimits(t *testing.T) {
 		f.sessions["valid"] = "alice"
 		s := New(f, Options{Actions: &fakeActionService{}})
 		s.actionUser.max = maxActionsPerIP + 1
+		s.actionUser.local.max = maxActionsPerIP + 1
 		h := s.Handler()
 		cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
 		for i := 0; i < maxActionsPerIP; i++ {
@@ -716,4 +700,30 @@ func TestActionAdmissionLimits(t *testing.T) {
 			t.Fatalf("busy response = %d: %s", response.Code, response.Body)
 		}
 	})
+}
+
+func TestSharedActionLimits(t *testing.T) {
+	database := testdb.Open(t)
+	f := newFakeAuth()
+	f.sessions["valid"] = "alice"
+	first := New(f, Options{Actions: &fakeActionService{}, SharedRateLimits: database})
+	second := New(f, Options{Actions: &fakeActionService{}, SharedRateLimits: database})
+	first.actionIP.max = maxActionsPerPlayer + 1
+	second.actionIP.max = maxActionsPerPlayer + 1
+	cookie := &http.Cookie{Name: "__Host-session", Value: "valid"}
+	for i := 0; i < maxActionsPerPlayer; i++ {
+		handler := first.Handler()
+		if i%2 == 1 {
+			handler = second.Handler()
+		}
+		ip := "198.51.100." + strconv.Itoa(i+1) + ":4000"
+		if response := actionRequest(handler, "/api/action-requests/counter.increment", "", cookie,
+			func(r *http.Request) { r.RemoteAddr = ip }); response.Code != http.StatusOK {
+			t.Fatalf("shared request %d: status = %d", i, response.Code)
+		}
+	}
+	if response := actionRequest(second.Handler(), "/api/action-requests/counter.increment", "", cookie,
+		func(r *http.Request) { r.RemoteAddr = "203.0.113.99:4000" }); response.Code != http.StatusTooManyRequests {
+		t.Fatalf("shared player quota = %d", response.Code)
+	}
 }

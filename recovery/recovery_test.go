@@ -173,6 +173,27 @@ func TestSMTPRequiresTLSAndDeliversCode(t *testing.T) {
 	}
 }
 
+func TestSMTPRejectsHeaderInjection(t *testing.T) {
+	sender := &smtpSender{address: "127.0.0.1:1", host: "127.0.0.1", from: "sender@example.com", mode: "tls"}
+	for _, tc := range []struct {
+		name string
+		to   string
+		code string
+		url  string
+	}{
+		{"to", "player@example.com\r\nBcc: evil@example.com", "code", "https://game.example/reset-password"},
+		{"code", "player@example.com", "code\r\nBcc: evil@example.com", "https://game.example/reset-password"},
+		{"url", "player@example.com", "code", "https://game.example/reset-password\r\nBcc: evil@example.com"},
+		{"display-name", "Player <player@example.com>", "code", "https://game.example/reset-password"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sender.SendReset(context.Background(), tc.to, tc.code, tc.url); err == nil {
+				t.Fatal("accepted header injection")
+			}
+		})
+	}
+}
+
 func TestSMTPRejectsMissingSTARTTLS(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

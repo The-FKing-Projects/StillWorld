@@ -184,30 +184,33 @@ environment variables:
 |---|---|
 | Concurrent login/signup password-hash work | 4 requests; excess requests receive `503` |
 | Failed logins per client IP | 20 failures per 15-minute window |
-| Failed logins per case-insensitive username | 10 failures per 15-minute window |
 | Signup requests per client IP | 5 per hour |
+| Deferred signup delivery attempts per email address | 1 per 10 minutes |
+| Deferred signup completion submissions per client IP | 20 per 15 minutes |
 | Password recovery requests per client IP | 10 per hour |
 | Password recovery requests per email address | 1 per 10 minutes |
-| Concurrent recovery and verification delivery attempts | 16; excess attempts are logged |
+| Concurrent recovery, verification, and signup delivery attempts | 16; excess attempts are logged |
 | Password reset submissions per client IP | 20 per 15 minutes |
 | Email verification requests per client IP / account | 10 per hour / 1 per 10 minutes |
 | Email verification submissions per client IP / account | 20 / 10 per 15 minutes |
+| Action requests per client IP / authenticated player | 120 / 60 per minute |
+| Concurrent action work | 64 requests; excess requests receive `503` |
 
 By default, these limits are per-process and in memory: they are not shared
-across servers and restart with the process. Successful login clears the
-username failure counter. The password-hash work uses Argon2id with
-64 MiB per operation by default, so four simultaneous operations can consume
-about 256 MiB for hashing alone, in addition to PostgreSQL, the application,
-and the operating system. Load-test the target host and monitor resource use;
-do not treat these initial limits as a guarantee of public-service capacity or
-abuse resistance.
+across servers and restart with the process. The password-hash work uses
+Argon2id with 64 MiB per operation by default, so four simultaneous operations
+can consume about 256 MiB for hashing alone, in addition to PostgreSQL, the
+application, and the operating system. Load-test the target host and monitor
+resource use; do not treat these initial limits as a guarantee of
+public-service capacity or abuse resistance.
 
-For shared, restart-persistent login, signup, password recovery, and email verification limits,
-apply the latest migrations and set `STILLWORLD_SHARED_RATE_LIMITS=true` on
-every instance using the same database schema. The public composition API can
-also enable `stillworld.Options.SharedRateLimits`. Instances using the default
-in-memory mode do not participate in the shared limits. Action limits,
-concurrent password-hash slots, and delivery slots always remain per-process.
+For shared, restart-persistent login, signup, password recovery, email
+verification, and action IP/player limits, apply the latest migrations and set
+`STILLWORLD_SHARED_RATE_LIMITS=true` on every instance using the same database
+schema. The public composition API can also enable
+`stillworld.Options.SharedRateLimits`. Instances using the default in-memory
+mode do not participate in the shared limits. Concurrent password-hash slots,
+action concurrency slots, and delivery slots always remain per-process.
 
 The shared store uses database time and fails closed with `503` if it is
 unavailable or its combined 100,000-key capacity is exhausted. It stores
@@ -232,16 +235,14 @@ is a starting target, not a security or capacity guarantee. The command does
 not change the application configuration; Argon2id parameters are currently
 compiled defaults. Do not lower them solely to hit a timing target.
 
-The per-username login limit can be deliberately exhausted by someone who
-knows a username, preventing that account from logging in until its 15-minute
-window expires. Signup returns distinct errors for an already-used username
-and email address, so it reveals whether an email is registered. Replacing the
-email-conflict response with a generic success message alone would not remove
-that signal while signup immediately creates usable accounts: attempting to
-log in with the submitted credentials reveals whether creation succeeded, and
-retrying a successful signup reveals the username conflict. Email verification
-or another flow change would be needed to avoid those signals; signup does not
-currently verify email addresses.
+Login throttling is per client IP only, so a distributed attacker can still
+attempt many usernames from many addresses. Signup without an email creates an
+account immediately and still reveals username conflicts. When email delivery
+is configured, signup with an email uses deferred verified signup: the response
+does not reveal whether the address is already registered, no loginable account
+exists until the emailed code is completed, and completion marks the address
+verified. Email on signup requires recovery/email delivery configuration;
+without it, omit the email field. Username conflicts remain visible.
 
 An administrator with database access can list account IDs, usernames, and
 account status with `stillworld list-accounts`, using `STILLWORLD_DATABASE_URL`
@@ -309,7 +310,7 @@ recovery setting is supplied. Protect the SMTP credentials like the database
 credential. A custom game may instead provide a `recovery.Config` and its own
 `recovery.Sender` to `stillworld.Options`; that sender must protect its own
 transport and honor context cancellation.
-Custom senders must implement both `SendReset` and `SendVerification`.
+Custom senders must implement `SendReset`, `SendVerification`, and `SendSignup`.
 
 The HTML game interface links to the recovery forms; the main server also
 serves these forms when recovery is enabled. API clients may submit
@@ -322,14 +323,29 @@ finish. If the result is unknown, try the new password or request another
 code rather than assuming it failed.
 
 Password recovery requires a verified address. With email delivery configured,
-players sign in and use **Email verification** on the game page, or visit
-`/verify-email` while signed in. API clients can POST to
-`/verify-email/request`, then POST `code` to `/verify-email`. Codes are sent
-in the email body, expire after 30 minutes, and work only for the signed-in
-account and its unchanged address. Verification requests share the bounded
-delivery slots with password recovery; delivery is best effort. A new code
-replaces the previous one. There is currently no self-service email change;
-an incorrect or inaccessible address requires administrator assistance.
+signup may include an optional email: `POST /signup` then returns a generic
+message and, when the address is eligible and within the per-address delivery
+quota, emails a code. Repeated signup attempts for the same address within 10
+minutes still receive the generic success response but do not send another
+message or replace a pending code; this bound applies per process by default
+and across instances when shared rate limits are enabled. Expired pending
+signup rows (including stored password hashes) are removed in bounded batches
+by the hourly maintenance loop alongside session cleanup; games using the
+composition API should call `CleanupExpiredPendingSignups` on the same
+schedule as outcome cleanup. API clients complete
+registration with form-encoded `code` to `POST /complete-signup` (HTML form at
+`GET /complete-signup`). Completing signup creates the account with the address
+already verified. Players who signed up without email, or who still have an
+unverified address from an earlier version, sign in and use **Email
+verification** on the game page, or visit `/verify-email` while signed in. API
+clients can POST to `/verify-email/request`, then POST `code` to
+`/verify-email`. Codes are sent in the email body, expire after 30 minutes, and
+signed-in verification codes work only for that account and its unchanged
+address. Signup, verification, and recovery delivery share the bounded delivery
+slots; delivery is best effort. A new pending signup or verification code
+replaces the previous one for that address or account. There is currently no
+self-service email change; an incorrect or inaccessible address requires
+administrator assistance.
 
 **Upgrade:** stop all old server instances before applying migration 00008 and
 start only updated instances afterward. All existing addresses start
@@ -338,7 +354,8 @@ sign in and verify their address before using recovery; users who cannot sign
 in need an administrator. Do not mix old and updated server versions: older
 servers can issue resets without checking verification. Downgrade is blocked
 while any account has an email address, and reverting to older code would
-restore its weaker recovery policy.
+restore its weaker recovery policy. Migration 00009 adds deferred signup
+storage; apply it before enabling email-bearing signup on updated servers.
 
 Request responses are generic for eligible and ineligible addresses. Delivery
 is asynchronous and best effort: limits, capacity, process shutdown, mail
@@ -347,10 +364,13 @@ older one. Monitor logs for recovery issuance, delivery, and capacity failures;
 logs intentionally omit addresses and codes. Limits may prevent repeated
 requests for the same address for 10 minutes, including when delivery fails.
 They are per-process unless shared limits are enabled as described above.
-The generic response and limits do not guarantee resistance to enumeration or
-abuse, especially since signup currently reveals email conflicts. Accounts
-without email, disabled accounts, and accounts unable to receive mail require
-administrator assistance.
+The generic recovery and deferred-signup responses and limits do not guarantee
+resistance to enumeration or abuse. Deferred signup hides whether an email is
+registered in the HTTP response, and the per-address signup delivery quota
+(charged only when a pending signup is scheduled) limits rotating-IP spam
+against one mailbox, but delivery timing and mailbox
+behavior can still leak information. Accounts without email, disabled accounts, and accounts unable to
+receive mail require administrator assistance.
 
 ## Backups and restore checks
 

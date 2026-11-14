@@ -17,6 +17,7 @@ import (
 type Sender interface {
 	SendReset(context.Context, string, string, string) error
 	SendVerification(context.Context, string, string, string) error
+	SendSignup(context.Context, string, string, string) error
 }
 
 // Config enables self-service password recovery.
@@ -75,6 +76,11 @@ func (c Config) ResetURL() string {
 // VerificationURL returns the configured verification page URL without a token.
 func (c Config) VerificationURL() string {
 	return strings.TrimSuffix(c.PublicOrigin, "/") + "/verify-email"
+}
+
+// SignupURL returns the configured deferred-signup completion page URL.
+func (c Config) SignupURL() string {
+	return strings.TrimSuffix(c.PublicOrigin, "/") + "/complete-signup"
 }
 
 // FromEnv configures SMTP recovery, or returns nil when no recovery settings

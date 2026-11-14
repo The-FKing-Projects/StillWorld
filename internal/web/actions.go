@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -36,12 +37,12 @@ func (s *Server) handleIssueActionRequest(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-	if userSlot == nil {
-		writeActionError(w, http.StatusTooManyRequests, "rate_limited", "Too many action requests; try again later.", "")
+	userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+	if status != 0 {
+		writeActionAdmissionError(w, status)
 		return
 	}
-	defer s.actionUser.finishCounted(userSlot)
+	defer s.finishActionUser(userSlot)
 
 	requestID, err := s.actions.IssueRequestID(r.Context(), account.ID, r.PathValue("actionName"))
 	switch {
@@ -71,12 +72,12 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	userSlot := s.actionUser.reserve(strconv.FormatInt(account.ID, 10))
-	if userSlot == nil {
-		writeActionError(w, http.StatusTooManyRequests, "rate_limited", "Too many action requests; try again later.", "")
+	userSlot, status := s.reserveActionUser(r.Context(), account.ID)
+	if status != 0 {
+		writeActionAdmissionError(w, status)
 		return
 	}
-	defer s.actionUser.finishCounted(userSlot)
+	defer s.finishActionUser(userSlot)
 
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
@@ -139,13 +140,17 @@ func (s *Server) authenticateAction(w http.ResponseWriter, r *http.Request) (aut
 	return auth.Account{}, false
 }
 
-func (s *Server) reserveActionIP(r *http.Request) (*entry, int) {
+func (s *Server) reserveActionIP(r *http.Request) (*authReservation, int) {
 	select {
 	case s.actionSlots <- struct{}{}:
 	default:
 		return nil, http.StatusServiceUnavailable
 	}
-	slot := s.actionIP.reserve(s.clientIP(r))
+	slot, err := s.actionIP.reserve(r.Context(), s.clientIP(r))
+	if err != nil {
+		<-s.actionSlots
+		return nil, http.StatusServiceUnavailable
+	}
 	if slot == nil {
 		<-s.actionSlots
 		return nil, http.StatusTooManyRequests
@@ -153,9 +158,28 @@ func (s *Server) reserveActionIP(r *http.Request) (*entry, int) {
 	return slot, 0
 }
 
-func (s *Server) finishActionIP(slot *entry) {
-	s.actionIP.finishCounted(slot)
+func (s *Server) finishActionIP(slot *authReservation) {
+	if err := s.actionIP.finish(slot, true, false); err != nil {
+		log.Print("action rate limit release failed")
+	}
 	<-s.actionSlots
+}
+
+func (s *Server) reserveActionUser(ctx context.Context, accountID int64) (*authReservation, int) {
+	slot, err := s.actionUser.reserve(ctx, strconv.FormatInt(accountID, 10))
+	if err != nil {
+		return nil, http.StatusServiceUnavailable
+	}
+	if slot == nil {
+		return nil, http.StatusTooManyRequests
+	}
+	return slot, 0
+}
+
+func (s *Server) finishActionUser(slot *authReservation) {
+	if err := s.actionUser.finish(slot, true, false); err != nil {
+		log.Print("action rate limit release failed")
+	}
 }
 
 func writeActionAdmissionError(w http.ResponseWriter, status int) {

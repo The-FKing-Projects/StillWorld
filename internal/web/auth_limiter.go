@@ -16,8 +16,8 @@ const (
 
 const (
 	// Scope values are stored persistently and must remain stable.
-	limitLoginIP int16 = iota + 1
-	limitLoginUser
+	limitLoginIP   int16 = iota + 1
+	limitLoginUser       // reserved; per-username login lockout was removed
 	limitSignupIP
 	limitRecoveryIP
 	limitRecoveryEmail
@@ -26,6 +26,10 @@ const (
 	limitVerifyRequestAccount
 	limitVerifySubmitIP
 	limitVerifySubmitAccount
+	limitActionIP
+	limitActionUser
+	limitCompleteSignupIP
+	limitSignupEmail
 )
 
 var errLimitCapacity = errors.New("shared rate limiter capacity exhausted")

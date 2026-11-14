@@ -30,6 +30,11 @@ func (s testSender) SendVerification(_ context.Context, to, code, verificationUR
 	return nil
 }
 
+func (s testSender) SendSignup(_ context.Context, to, code, signupURL string) error {
+	s.messages <- resetMail{to, code, signupURL}
+	return nil
+}
+
 type recoveryStub struct {
 	*fakeAuth
 	calls chan string

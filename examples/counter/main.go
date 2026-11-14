@@ -141,6 +141,9 @@ func cleanupOutcomes(ctx context.Context, app *stillworld.App) {
 			if _, err := app.CleanupExpiredOutcomes(ctx, 100); err != nil {
 				log.Printf("clean expired action outcomes: %v", err)
 			}
+			if _, err := app.CleanupExpiredPendingSignups(ctx, 100); err != nil {
+				log.Printf("clean expired pending signups: %v", err)
+			}
 		}
 	}
 }

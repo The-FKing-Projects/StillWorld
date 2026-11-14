@@ -55,7 +55,7 @@ type Options struct {
 	Presentation presentation.Game
 	// Recovery enables opt-in self-service password recovery.
 	Recovery *recovery.Config
-	// SharedRateLimits stores authentication rate limits in the application database.
+	// SharedRateLimits stores authentication and action rate limits in the application database.
 	SharedRateLimits bool
 }
 
@@ -139,6 +139,16 @@ func (app *App) CleanupExpiredOutcomes(ctx context.Context, batchSize int) (int6
 		return 0, errors.New("stillworld: application is required")
 	}
 	return app.action.CleanupExpired(ctx, batchSize)
+}
+
+// CleanupExpiredPendingSignups removes expired deferred signup rows for up to
+// batchSize addresses. Call periodically from the game's maintenance worker;
+// batchSize must be between 1 and 1000.
+func (app *App) CleanupExpiredPendingSignups(ctx context.Context, batchSize int) (int64, error) {
+	if app == nil || app.auth == nil {
+		return 0, errors.New("stillworld: application is required")
+	}
+	return app.auth.DeleteExpiredPendingSignups(ctx, batchSize)
 }
 
 // Handler verifies schema readiness before returning the authenticated HTTP
