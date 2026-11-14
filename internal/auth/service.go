@@ -221,6 +221,9 @@ func (s *Service) ResetPassword(ctx context.Context, username, password string) 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
 		return rollbackAuth(tx, fmt.Errorf("revoke sessions: %w", err))
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE account_id = $1`, id); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("revoke password reset tokens: %w", err))
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: commit password reset: %w", ErrResetOutcomeUnknown, err)
 	}
@@ -254,6 +257,9 @@ func (s *Service) SetAccountEnabled(ctx context.Context, username string, enable
 	if !enabled || wasDisabled {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
 			return rollbackAuth(tx, fmt.Errorf("revoke sessions: %w", err))
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE account_id = $1`, id); err != nil {
+			return rollbackAuth(tx, fmt.Errorf("revoke password reset tokens: %w", err))
 		}
 	}
 	if err := tx.Commit(); err != nil {

@@ -32,10 +32,17 @@ Status: draft. These are design decisions, not a finished specification.
 - **Sessions are server-side.** A random token in a cookie references a session
   stored in PostgreSQL, so sessions can be revoked immediately. Sessions use
   sliding expiry: 30 days since last activity, with a hard cap of 90 days.
+- **Recovery tokens are single-use and short-lived.** The internal recovery
+  service stores only token hashes, keeps at most one 30-minute token per
+  account, and atomically replaces the password and revokes sessions. An
+  administrator's password reset or account disable invalidates outstanding
+  tokens.
 
 ## Still open
 
-- Password reset flow and target-host Argon2id parameters.
+- Email delivery, abuse controls, enumeration resistance, and the player-facing
+  password reset flow remain unimplemented; recovery tokens are not exposed by
+  HTTP. Target-host Argon2id parameters also remain open.
 - Main-executable configuration for choosing a downstream game and its Turns
   policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup

@@ -21,6 +21,9 @@ server-rendered player interface and is not production-ready. The
 PostgreSQL-backed action and composed-migration tests pass against a disposable
 local database. This is not a feature-complete system.
 
+Password recovery has an internal token foundation, but email delivery and
+player-facing self-service reset are not implemented.
+
 The HTTP endpoints are experimental and are not yet ready for public
 deployment. State-changing requests must include a matching `Origin`,
 same-origin Fetch Metadata, or `X-Stillworld-Request: 1` for non-browser clients.

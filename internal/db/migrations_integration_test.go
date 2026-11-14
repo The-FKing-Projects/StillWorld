@@ -22,7 +22,7 @@ func TestAccountDisablingMigrationUpgradeAndGuardedDowngrade(t *testing.T) {
 	if _, err := d.ExecContext(ctx, `INSERT INTO accounts (username, password_hash) VALUES ('migration_player', 'hash')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Down(ctx); err != nil {
+	if _, err := provider.DownTo(ctx, 4); err != nil {
 		t.Fatalf("downgrade with active accounts: %v", err)
 	}
 	if err := db.Migrate(ctx, d); err != nil {
@@ -35,7 +35,7 @@ func TestAccountDisablingMigrationUpgradeAndGuardedDowngrade(t *testing.T) {
 	if _, err := d.ExecContext(ctx, `UPDATE accounts SET disabled_at = now() WHERE username = 'migration_player'`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Down(ctx); err == nil {
+	if _, err := provider.DownTo(ctx, 4); err == nil {
 		t.Fatal("downgrade succeeded while an account was disabled")
 	}
 	if err := d.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM accounts WHERE username = 'migration_player'`).Scan(&active); err != nil || !active {
