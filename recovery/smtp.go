@@ -22,30 +22,34 @@ type smtpSender struct {
 }
 
 func (s *smtpSender) SendReset(ctx context.Context, to, code, resetURL string) error {
-	body := fmt.Sprintf("Someone requested a password reset for your account.\r\n"+
-		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
-		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", resetURL, code)
-	return s.send(ctx, to, code, resetURL, "StillWorld password reset", body)
+	return s.send(ctx, to, code, resetURL, "StillWorld password reset",
+		"Someone requested a password reset for your account.\r\n"+
+			"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+			"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n")
 }
 
 func (s *smtpSender) SendVerification(ctx context.Context, to, code, verificationURL string) error {
-	body := fmt.Sprintf("Someone requested email verification for a StillWorld account.\r\n"+
-		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
-		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", verificationURL, code)
-	return s.send(ctx, to, code, verificationURL, "StillWorld email verification", body)
+	return s.send(ctx, to, code, verificationURL, "StillWorld email verification",
+		"Someone requested email verification for a StillWorld account.\r\n"+
+			"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+			"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n")
 }
 
 func (s *smtpSender) SendSignup(ctx context.Context, to, code, signupURL string) error {
-	body := fmt.Sprintf("Complete your StillWorld account signup.\r\n"+
-		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
-		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", signupURL, code)
-	return s.send(ctx, to, code, signupURL, "StillWorld account signup", body)
+	return s.send(ctx, to, code, signupURL, "StillWorld account signup",
+		"Complete your StillWorld account signup.\r\n"+
+			"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+			"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n")
 }
 
-func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, body string) error {
-	if !validAddress(to) || strings.ContainsAny(code, "\r\n") || strings.ContainsAny(pageURL, "\r\n") {
+func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, bodyFormat string) error {
+	if !validAddress(to) || !validAddress(s.from) || strings.ContainsAny(code, "\r\n") ||
+		strings.ContainsAny(pageURL, "\r\n") || strings.ContainsAny(subject, "\r\n") ||
+		strings.Count(bodyFormat, "%s") != 2 || strings.ContainsAny(bodyFormat, "\x00") {
 		return errors.New("recovery: invalid message")
 	}
+	// Build the body only after rejecting header-breaking characters in inputs.
+	body := fmt.Sprintf(bodyFormat, pageURL, code)
 	dialer := net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", s.address)
 	if err != nil {
@@ -106,11 +110,17 @@ func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, body 
 	if err != nil {
 		return fmt.Errorf("start SMTP message: %w", err)
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n"+
-		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
-		s.from, to, subject, body)
-	if _, err := writer.Write([]byte(message)); err != nil {
-		return fmt.Errorf("write SMTP message: %w", err)
+	// Write headers and body separately so address/subject values cannot
+	// smuggle additional header lines into the message.
+	headers := "From: " + s.from + "\r\n" +
+		"To: " + to + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"
+	if _, err := writer.Write([]byte(headers)); err != nil {
+		return fmt.Errorf("write SMTP headers: %w", err)
+	}
+	if _, err := writer.Write([]byte(body)); err != nil {
+		return fmt.Errorf("write SMTP body: %w", err)
 	}
 	if err := writer.Close(); err != nil {
 		return fmt.Errorf("finish SMTP message: %w", err)
