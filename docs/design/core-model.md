@@ -25,26 +25,32 @@ Status: draft. These are design decisions, not a finished specification.
 
 - **Accounts live in StillWorld's own database.** Players sign in with a
   username and password; external login providers are out of scope for now.
-- **Email is optional** and used only for password reset. Accounts without an
-  email cannot reset their own password and need the host's help.
+- **Email is optional.** When present it supports signed-in address verification
+  and, once verified, opt-in self-service password recovery. Accounts without a
+  usable verified address cannot reset their own password and need the host's
+  help (`stillworld reset-password`).
 
 - **Passwords are hashed with Argon2id.**
 - **Sessions are server-side.** A random token in a cookie references a session
   stored in PostgreSQL, so sessions can be revoked immediately. Sessions use
   sliding expiry: 30 days since last activity, with a hard cap of 90 days.
-- **Recovery tokens are single-use and short-lived.** The internal recovery
-  service stores only token hashes, keeps at most one 30-minute token per
-  account, and atomically replaces the password and revokes sessions. An
-  administrator's password reset or account disable invalidates outstanding
-  tokens.
+- **Password recovery is implemented (issue #17).** Opt-in SMTP delivery is
+  documented in [deployment](../deployment.md#optional-password-recovery).
+  Recovery codes are single-use and short-lived: the service stores only token
+  hashes, keeps at most one 30-minute token per account, and atomically
+  replaces the password and revokes sessions. An administrator's password
+  reset, session revocation, or account disable invalidates outstanding
+  tokens. Recovery requires a verified address.
 
 ## Still open
 
-- Self-service password recovery is optional and uses email codes, bounded
-  admission (in memory by default or shared through PostgreSQL), and generic
-  request responses. Recovery requires the signed-in account holder to verify
-  the address first; these controls do not establish comprehensive
-  enumeration or abuse resistance. Target-host Argon2id parameters remain open.
+- Recovery and verification use bounded admission (in memory by default or
+  shared through PostgreSQL) and generic request responses; these controls do
+  not establish comprehensive enumeration or abuse resistance. Remaining
+  authentication and rate-limit remediations are tracked in issue #23
+  (documenting a limitation is not the same as remediating it).
+- Target-host Argon2id latency, memory, and concurrency budgets remain
+  undecided; see issue #18 before retuning parameters.
 - Main-executable configuration for choosing a downstream game and its Turns
   policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup
@@ -52,3 +58,5 @@ Status: draft. These are design decisions, not a finished specification.
 - Extend the initial HTML forms and result presentation as games need richer
   inputs and views; the Relay example demonstrates the shared HTML and JSON
   action pipeline.
+- Optional TOTP (#15) and passkeys (#16) are not implemented; passkeys are
+  intended after TOTP.
