@@ -43,6 +43,36 @@ func TestAccountDisablingMigrationUpgradeAndGuardedDowngrade(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationMigrationInvalidatesLegacyResetCodes(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.Open(t)
+	provider, err := goose.NewProvider(goose.DialectPostgres, d, os.DirFS("migrations"), goose.WithTableName("goose_db_version"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.DownTo(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, `WITH a AS (
+		INSERT INTO accounts (username, email, password_hash) VALUES ('legacy', 'legacy@example.invalid', 'hash') RETURNING id)
+		INSERT INTO password_reset_tokens (account_id, token_hash, expires_at)
+		SELECT id, decode(repeat('00', 32), 'hex'), now() + interval '1 hour' FROM a`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	var verified bool
+	var tokens int
+	if err := d.QueryRowContext(ctx, `SELECT email_verified_at IS NOT NULL,
+		(SELECT count(*) FROM password_reset_tokens) FROM accounts WHERE username = 'legacy'`).Scan(&verified, &tokens); err != nil || verified || tokens != 0 {
+		t.Fatalf("legacy verification=%v tokens=%d: %v", verified, tokens, err)
+	}
+	if _, err := provider.Down(ctx); err == nil {
+		t.Fatal("downgrade allowed removal of verification with stored addresses")
+	}
+}
+
 func TestGameMigrationCoordinationAndBinding(t *testing.T) {
 	ctx := context.Background()
 	d := testdb.Open(t)

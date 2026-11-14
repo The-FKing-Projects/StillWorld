@@ -35,19 +35,23 @@ type htmlForm struct {
 }
 
 type htmlPage struct {
-	Title       string
-	Description string
-	Username    string
-	Turns       *int64
-	Sections    []presentation.Section
-	Forms       []htmlForm
-	AuthKind    string
-	Message     string
-	Recovery    bool
-	NoGame      bool
-	ResetDone   bool
-	RetryAction string
-	RetryFields url.Values
+	Title         string
+	Description   string
+	Username      string
+	Turns         *int64
+	Sections      []presentation.Section
+	Forms         []htmlForm
+	AuthKind      string
+	Message       string
+	Recovery      bool
+	NoGame        bool
+	ResetDone     bool
+	RetryAction   string
+	RetryFields   url.Values
+	CanVerify     bool
+	VerifyPage    bool
+	Email         string
+	EmailVerified bool
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -59,14 +63,25 @@ header{background:#173f3a;color:#fff;padding:1rem max(1rem,calc((100% - 60rem)/2
 header a{color:#fff;font-weight:700} main{max-width:60rem;margin:auto;padding:1.5rem 1rem 4rem}
 h1,h2{line-height:1.2} h2{margin-top:2rem} a{color:#075b54} p{max-width:70ch}
 label{display:block;font-weight:600;margin-top:1rem} input:not([type=hidden]){display:block;box-sizing:border-box;width:min(100%,24rem);padding:.6rem;font:inherit;border:1px solid #536a64}
+.email{overflow-wrap:anywhere}
 button{font:inherit;font-weight:650;background:#17584d;color:white;border:2px solid #17584d;padding:.6rem 1rem;cursor:pointer}
 button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outline-offset:3px}
 .notice{border:1px solid #536a64;padding:1rem;background:#fff}.actions{display:flex;flex-wrap:wrap;gap:1.5rem}.actions form{flex:1 1 15rem}
 .logout{display:inline}.logout button{background:transparent;color:#fff;border-color:#fff;margin-left:1rem}
 </style></head><body><header>{{if .NoGame}}StillWorld{{else}}<a href="/">Game home</a>{{end}}{{if .Username}} <span>Signed in as {{.Username}}</span>
+{{if .CanVerify}} <a href="/verify-email">Email verification</a>{{end}}
 <form class="logout" method="post" action="/logout"><input type="hidden" name="_html" value="1"><button type="submit">Sign out</button></form>{{end}}</header>
 <main><h1>{{.Title}}</h1>{{if .Description}}<p>{{.Description}}</p>{{end}}{{if .Turns}}<p><strong>Available Turns:</strong> {{.Turns}}</p>{{end}}
 {{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
+{{if .VerifyPage}}
+{{if .Email}}{{if .EmailVerified}}<p>Your address <span class="email">{{.Email}}</span> is verified for password recovery.</p>
+{{else}}<p>Verify <span class="email">{{.Email}}</span> to enable password recovery for your account.</p>
+<form method="post" action="/verify-email/request"><input type="hidden" name="_html" value="1"><button type="submit">Send verification code</button></form>
+<form method="post" action="/verify-email"><input type="hidden" name="_html" value="1">
+<label for="verification-code">Verification code</label><input id="verification-code" name="code" autocomplete="off" required maxlength="43">
+<p><button type="submit">Verify email</button></p></form>{{end}}
+{{else}}<p>Your account has no email address. Contact an administrator if you need help recovering your account.</p>{{end}}
+{{end}}
 {{if .AuthKind}}<form method="post" action="/{{.AuthKind}}"><input type="hidden" name="_html" value="1">
 {{if eq .AuthKind "forgot-password"}}
 <label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required maxlength="254">
@@ -78,7 +93,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <p><button type="submit">Change password</button></p>
 {{else}}
 <label for="username">Username</label><input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
-{{if eq .AuthKind "signup"}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email">{{end}}
+{{if eq .AuthKind "signup"}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email">{{if .Recovery}}<p>After signing in, verify your address to enable password recovery.</p>{{end}}{{end}}
 <label for="password">Password</label><input id="password" name="password" type="password" {{if eq .AuthKind "signup"}}autocomplete="new-password"{{else}}autocomplete="current-password"{{end}} required minlength="8">
 <p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p>{{end}}</form>
 {{if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>
@@ -93,7 +108,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <p><button type="submit">{{.Label}}</button></p></form>{{end}}</div></section>{{end}}
 {{if .RetryAction}}<form method="post" action="/actions/{{.RetryAction}}">{{range $name,$values := .RetryFields}}{{range $values}}<input type="hidden" name="{{$name}}" value="{{.}}">{{end}}{{end}}
 <button type="submit">Retry the original action</button></form>{{end}}
-{{if and (not .AuthKind) (not .Forms) (not .Recovery)}}<p><a href="/">Return to the game</a></p>{{end}}
+{{if and (not .AuthKind) (not .Forms) (not .Recovery) (not .VerifyPage)}}<p><a href="/">Return to the game</a></p>{{end}}
 </main></body></html>`))
 
 var formFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -151,7 +166,7 @@ func (s *Server) handleHTMLLogin(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleHTMLSignup(w http.ResponseWriter, _ *http.Request) {
-	renderHTML(w, http.StatusOK, htmlPage{Title: "Create an account", AuthKind: "signup"})
+	renderHTML(w, http.StatusOK, htmlPage{Title: "Create an account", AuthKind: "signup", Recovery: s.opts.Recovery != nil})
 }
 
 func (s *Server) handleHTMLForgotPassword(w http.ResponseWriter, _ *http.Request) {
@@ -211,7 +226,7 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 		renderHTML(w, http.StatusServiceUnavailable, htmlPage{Title: "Temporarily unavailable", Message: "The game actions could not be displayed. Try again later."})
 		return
 	}
-	data := htmlPage{Title: page.Title, Description: page.Description, Username: account.Username, Sections: page.Sections}
+	data := htmlPage{Title: page.Title, Description: page.Description, Username: account.Username, Sections: page.Sections, CanVerify: s.opts.Recovery != nil}
 	if reader, ok := s.actions.(turnsReader); ok {
 		ipSlot, status := s.reserveActionIP(r)
 		if status != 0 {

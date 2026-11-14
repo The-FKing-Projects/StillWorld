@@ -188,8 +188,10 @@ environment variables:
 | Signup requests per client IP | 5 per hour |
 | Password recovery requests per client IP | 10 per hour |
 | Password recovery requests per email address | 1 per 10 minutes |
-| Concurrent recovery delivery attempts | 16; excess attempts are dropped and logged |
+| Concurrent recovery and verification delivery attempts | 16; excess attempts are logged |
 | Password reset submissions per client IP | 20 per 15 minutes |
+| Email verification requests per client IP / account | 10 per hour / 1 per 10 minutes |
+| Email verification submissions per client IP / account | 20 / 10 per 15 minutes |
 
 By default, these limits are per-process and in memory: they are not shared
 across servers and restart with the process. Successful login clears the
@@ -200,7 +202,7 @@ and the operating system. Load-test the target host and monitor resource use;
 do not treat these initial limits as a guarantee of public-service capacity or
 abuse resistance.
 
-For shared, restart-persistent login, signup, and password recovery limits,
+For shared, restart-persistent login, signup, password recovery, and email verification limits,
 apply the latest migrations and set `STILLWORLD_SHARED_RATE_LIMITS=true` on
 every instance using the same database schema. The public composition API can
 also enable `stillworld.Options.SharedRateLimits`. Instances using the default
@@ -307,6 +309,7 @@ recovery setting is supplied. Protect the SMTP credentials like the database
 credential. A custom game may instead provide a `recovery.Config` and its own
 `recovery.Sender` to `stillworld.Options`; that sender must protect its own
 transport and honor context cancellation.
+Custom senders must implement both `SendReset` and `SendVerification`.
 
 The HTML game interface links to the recovery forms; the main server also
 serves these forms when recovery is enabled. API clients may submit
@@ -318,6 +321,25 @@ reset revokes existing sessions. Requests already authenticated may still
 finish. If the result is unknown, try the new password or request another
 code rather than assuming it failed.
 
+Password recovery requires a verified address. With email delivery configured,
+players sign in and use **Email verification** on the game page, or visit
+`/verify-email` while signed in. API clients can POST to
+`/verify-email/request`, then POST `code` to `/verify-email`. Codes are sent
+in the email body, expire after 30 minutes, and work only for the signed-in
+account and its unchanged address. Verification requests share the bounded
+delivery slots with password recovery; delivery is best effort. A new code
+replaces the previous one. There is currently no self-service email change;
+an incorrect or inaccessible address requires administrator assistance.
+
+**Upgrade:** stop all old server instances before applying migration 00008 and
+start only updated instances afterward. All existing addresses start
+unverified and all outstanding reset codes are invalidated. Existing users must
+sign in and verify their address before using recovery; users who cannot sign
+in need an administrator. Do not mix old and updated server versions: older
+servers can issue resets without checking verification. Downgrade is blocked
+while any account has an email address, and reverting to older code would
+restore its weaker recovery policy.
+
 Request responses are generic for eligible and ineligible addresses. Delivery
 is asynchronous and best effort: limits, capacity, process shutdown, mail
 failures, or a full mailbox can prevent delivery. A newer code invalidates an
@@ -325,12 +347,10 @@ older one. Monitor logs for recovery issuance, delivery, and capacity failures;
 logs intentionally omit addresses and codes. Limits may prevent repeated
 requests for the same address for 10 minutes, including when delivery fails.
 They are per-process unless shared limits are enabled as described above.
-The generic response and limits do not guarantee resistance to
-enumeration or abuse, especially since signup currently reveals email
-conflicts. Signup does not verify email addresses: anyone controlling a
-registered address can reset that account, so do not enable recovery unless
-that trust model is acceptable. Accounts without email, disabled accounts, and
-accounts unable to receive mail require administrator assistance.
+The generic response and limits do not guarantee resistance to enumeration or
+abuse, especially since signup currently reveals email conflicts. Accounts
+without email, disabled accounts, and accounts unable to receive mail require
+administrator assistance.
 
 ## Backups and restore checks
 

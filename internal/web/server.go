@@ -72,21 +72,25 @@ const (
 
 // Server serves the HTTP API.
 type Server struct {
-	auth          Authenticator
-	opts          Options
-	actions       ActionService
-	hashSlots     chan struct{}
-	loginIP       *authLimiter
-	loginUser     *authLimiter
-	signupIP      *authLimiter
-	actionIP      *limiter
-	actionUser    *limiter
-	actionSlots   chan struct{}
-	recoveryIP    *authLimiter
-	recoveryEmail *authLimiter
-	resetIP       *authLimiter
-	recoverySlots chan struct{}
-	cookieName    string
+	auth                 Authenticator
+	opts                 Options
+	actions              ActionService
+	hashSlots            chan struct{}
+	loginIP              *authLimiter
+	loginUser            *authLimiter
+	signupIP             *authLimiter
+	actionIP             *limiter
+	actionUser           *limiter
+	actionSlots          chan struct{}
+	recoveryIP           *authLimiter
+	recoveryEmail        *authLimiter
+	resetIP              *authLimiter
+	verifyRequestIP      *authLimiter
+	verifyRequestAccount *authLimiter
+	verifySubmitIP       *authLimiter
+	verifySubmitAccount  *authLimiter
+	recoverySlots        chan struct{}
+	cookieName           string
 }
 
 // New returns a Server.
@@ -100,21 +104,25 @@ func New(a Authenticator, opts Options) *Server {
 		name = "session"
 	}
 	return &Server{
-		auth:          a,
-		opts:          opts,
-		hashSlots:     make(chan struct{}, maxConcurrentHashes),
-		loginIP:       newAuthLimiter(opts.SharedRateLimits, limitLoginIP, maxLoginFailsIP, loginWindow, opts.Now),
-		loginUser:     newAuthLimiter(opts.SharedRateLimits, limitLoginUser, maxLoginFailsID, loginWindow, opts.Now),
-		signupIP:      newAuthLimiter(opts.SharedRateLimits, limitSignupIP, maxSignupsIP, signupWindow, opts.Now),
-		actionIP:      newLimiter(maxActionsPerIP, time.Minute, opts.Now),
-		actionUser:    newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
-		actionSlots:   make(chan struct{}, maxConcurrentActions),
-		recoveryIP:    newAuthLimiter(opts.SharedRateLimits, limitRecoveryIP, 10, time.Hour, opts.Now),
-		recoveryEmail: newAuthLimiter(opts.SharedRateLimits, limitRecoveryEmail, 1, 10*time.Minute, opts.Now),
-		resetIP:       newAuthLimiter(opts.SharedRateLimits, limitResetIP, 20, 15*time.Minute, opts.Now),
-		recoverySlots: make(chan struct{}, 16),
-		actions:       opts.Actions,
-		cookieName:    name,
+		auth:                 a,
+		opts:                 opts,
+		hashSlots:            make(chan struct{}, maxConcurrentHashes),
+		loginIP:              newAuthLimiter(opts.SharedRateLimits, limitLoginIP, maxLoginFailsIP, loginWindow, opts.Now),
+		loginUser:            newAuthLimiter(opts.SharedRateLimits, limitLoginUser, maxLoginFailsID, loginWindow, opts.Now),
+		signupIP:             newAuthLimiter(opts.SharedRateLimits, limitSignupIP, maxSignupsIP, signupWindow, opts.Now),
+		actionIP:             newLimiter(maxActionsPerIP, time.Minute, opts.Now),
+		actionUser:           newLimiter(maxActionsPerPlayer, time.Minute, opts.Now),
+		actionSlots:          make(chan struct{}, maxConcurrentActions),
+		recoveryIP:           newAuthLimiter(opts.SharedRateLimits, limitRecoveryIP, 10, time.Hour, opts.Now),
+		recoveryEmail:        newAuthLimiter(opts.SharedRateLimits, limitRecoveryEmail, 1, 10*time.Minute, opts.Now),
+		resetIP:              newAuthLimiter(opts.SharedRateLimits, limitResetIP, 20, 15*time.Minute, opts.Now),
+		verifyRequestIP:      newAuthLimiter(opts.SharedRateLimits, limitVerifyRequestIP, 10, time.Hour, opts.Now),
+		verifyRequestAccount: newAuthLimiter(opts.SharedRateLimits, limitVerifyRequestAccount, 1, 10*time.Minute, opts.Now),
+		verifySubmitIP:       newAuthLimiter(opts.SharedRateLimits, limitVerifySubmitIP, 20, 15*time.Minute, opts.Now),
+		verifySubmitAccount:  newAuthLimiter(opts.SharedRateLimits, limitVerifySubmitAccount, 10, 15*time.Minute, opts.Now),
+		recoverySlots:        make(chan struct{}, 16),
+		actions:              opts.Actions,
+		cookieName:           name,
 	}
 }
 
@@ -133,6 +141,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /reset-password", s.handleResetPassword)
 		mux.HandleFunc("GET /forgot-password", s.handleHTMLForgotPassword)
 		mux.HandleFunc("GET /reset-password", s.handleHTMLResetPassword)
+		mux.HandleFunc("GET /verify-email", s.handleVerifyEmailPage)
+		mux.HandleFunc("POST /verify-email/request", s.handleVerifyEmailRequest)
+		mux.HandleFunc("POST /verify-email", s.handleVerifyEmail)
 	}
 	if s.actions != nil {
 		mux.HandleFunc("POST /api/action-requests/{actionName}", s.handleIssueActionRequest)

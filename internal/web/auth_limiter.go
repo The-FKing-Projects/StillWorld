@@ -22,6 +22,10 @@ const (
 	limitRecoveryIP
 	limitRecoveryEmail
 	limitResetIP
+	limitVerifyRequestIP
+	limitVerifyRequestAccount
+	limitVerifySubmitIP
+	limitVerifySubmitAccount
 )
 
 var errLimitCapacity = errors.New("shared rate limiter capacity exhausted")

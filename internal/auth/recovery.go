@@ -41,7 +41,8 @@ func (s *Service) IssueResetTokenForDelivery(ctx context.Context, email string) 
 	var id int64
 	var storedEmail string
 	err = tx.QueryRowContext(ctx, `SELECT id, email FROM accounts
-		WHERE lower(email) = lower($1) AND disabled_at IS NULL FOR UPDATE`, email).Scan(&id, &storedEmail)
+		WHERE lower(email) = lower($1) AND disabled_at IS NULL
+			AND email_verified_at IS NOT NULL AND email = verified_email FOR UPDATE`, email).Scan(&id, &storedEmail)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", rollbackAuth(tx, ErrRecoveryUnavailable)
 	}
@@ -95,7 +96,8 @@ func (s *Service) RedeemResetToken(ctx context.Context, token, password string) 
 	}
 	var lockedID int64
 	err = tx.QueryRowContext(ctx, `SELECT id FROM accounts
-		WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`, id).Scan(&lockedID)
+		WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NOT NULL
+			AND email = verified_email FOR UPDATE`, id).Scan(&lockedID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return rollbackAuth(tx, ErrInvalidResetToken)
 	}

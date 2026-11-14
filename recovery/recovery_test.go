@@ -156,11 +156,17 @@ func TestSMTPRequiresTLSAndDeliversCode(t *testing.T) {
 				mode: mode, username: "user", password: "secret",
 				tlsConfig: &tls.Config{ServerName: "127.0.0.1", RootCAs: roots, MinVersion: tls.VersionTLS12},
 			}
-			if err := sender.SendReset(context.Background(), "player@example.com", "reset-code", "https://game.example/reset-password"); err != nil {
+			code, pageURL, subject := "reset-code", "https://game.example/reset-password", "StillWorld password reset"
+			send := sender.SendReset
+			if mode == "starttls" {
+				code, pageURL, subject = "verify-code", "https://game.example/verify-email", "StillWorld email verification"
+				send = sender.SendVerification
+			}
+			if err := send(context.Background(), "player@example.com", code, pageURL); err != nil {
 				t.Fatal(err)
 			}
 			message := <-result
-			if !strings.Contains(message, "reset-code") || !strings.Contains(message, "https://game.example/reset-password") || strings.Contains(message, "password=reset-code") {
+			if !strings.Contains(message, code) || !strings.Contains(message, pageURL) || !strings.Contains(message, subject) || strings.Contains(message, pageURL+"?") {
 				t.Fatalf("unexpected message: %q", message)
 			}
 		})

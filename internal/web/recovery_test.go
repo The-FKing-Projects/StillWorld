@@ -25,6 +25,11 @@ func (s testSender) SendReset(_ context.Context, to, code, resetURL string) erro
 	return nil
 }
 
+func (s testSender) SendVerification(_ context.Context, to, code, verificationURL string) error {
+	s.messages <- resetMail{to, code, verificationURL}
+	return nil
+}
+
 type recoveryStub struct {
 	*fakeAuth
 	calls chan string
@@ -152,7 +157,15 @@ func TestRecoveryEndToEnd(t *testing.T) {
 	}
 	ctx := context.Background()
 	const email = "Player@example.invalid"
-	if _, err := service.Register(ctx, "player", email, "original-password"); err != nil {
+	id, err := service.Register(ctx, "player", email, "original-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, err := service.IssueEmailVerificationToken(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.VerifyEmail(ctx, id, code); err != nil {
 		t.Fatal(err)
 	}
 	session, err := service.Login(ctx, "player", "original-password")

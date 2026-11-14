@@ -11,7 +11,7 @@ import (
 func TestRevokeSessionsLeavesCredentialsAndOtherAccountsAlone(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
-	name, _ := register(t, s, "player@example.invalid")
+	name, _ := registerVerified(t, s, "player@example.invalid")
 	other, _ := register(t, s, "")
 	first, err := s.Login(ctx, name, "password123")
 	if err != nil {

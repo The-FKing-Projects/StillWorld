@@ -22,7 +22,21 @@ type smtpSender struct {
 }
 
 func (s *smtpSender) SendReset(ctx context.Context, to, code, resetURL string) error {
-	if !validAddress(to) || strings.ContainsAny(code, "\r\n") || strings.ContainsAny(resetURL, "\r\n") {
+	body := fmt.Sprintf("Someone requested a password reset for your account.\r\n"+
+		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", resetURL, code)
+	return s.send(ctx, to, code, resetURL, "StillWorld password reset", body)
+}
+
+func (s *smtpSender) SendVerification(ctx context.Context, to, code, verificationURL string) error {
+	body := fmt.Sprintf("Someone requested email verification for a StillWorld account.\r\n"+
+		"Sign in, open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
+		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n", verificationURL, code)
+	return s.send(ctx, to, code, verificationURL, "StillWorld email verification", body)
+}
+
+func (s *smtpSender) send(ctx context.Context, to, code, pageURL, subject, body string) error {
+	if !validAddress(to) || strings.ContainsAny(code, "\r\n") || strings.ContainsAny(pageURL, "\r\n") {
 		return errors.New("recovery: invalid message")
 	}
 	dialer := net.Dialer{Timeout: 10 * time.Second}
@@ -85,12 +99,9 @@ func (s *smtpSender) SendReset(ctx context.Context, to, code, resetURL string) e
 	if err != nil {
 		return fmt.Errorf("start SMTP message: %w", err)
 	}
-	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: StillWorld password reset\r\n"+
-		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n"+
-		"Someone requested a password reset for your account.\r\n"+
-		"Open %s and enter this code:\r\n\r\n%s\r\n\r\n"+
-		"The code expires 30 minutes after it was requested. If you did not request this, ignore this message.\r\n",
-		s.from, to, resetURL, code)
+	message := fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\n"+
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
+		s.from, to, subject, body)
 	if _, err := writer.Write([]byte(message)); err != nil {
 		return fmt.Errorf("write SMTP message: %w", err)
 	}

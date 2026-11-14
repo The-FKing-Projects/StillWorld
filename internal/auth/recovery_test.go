@@ -10,11 +10,24 @@ import (
 	"time"
 )
 
+func registerVerified(t *testing.T, s *Service, email string) (string, int64) {
+	t.Helper()
+	name, id := register(t, s, email)
+	code, _, err := s.IssueEmailVerificationToken(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.VerifyEmail(context.Background(), id, code); err != nil {
+		t.Fatal(err)
+	}
+	return name, id
+}
+
 func TestResetTokenSingleUseAndSessionRevocation(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, id := register(t, s, email)
+	name, id := registerVerified(t, s, email)
 	session, err := s.Login(ctx, name, "password123")
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +81,7 @@ func TestResetTokenExpiryAndEligibility(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, id := register(t, s, email)
+	name, id := registerVerified(t, s, email)
 	for _, address := range []string{"", "missing@example.invalid", strings.Repeat("a", maxEmailLen+1)} {
 		if _, err := s.IssueResetToken(ctx, address); !errors.Is(err, ErrRecoveryUnavailable) {
 			t.Fatalf("ineligible address: %v", err)
@@ -97,7 +110,7 @@ func TestAdminChangesInvalidateResetTokens(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, _ := register(t, s, email)
+	name, _ := registerVerified(t, s, email)
 	token, err := s.IssueResetToken(ctx, email)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +140,7 @@ func TestAdminChangesRollBackWhenTokenRevocationFails(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, _ := register(t, s, email)
+	name, _ := registerVerified(t, s, email)
 	token, err := s.IssueResetToken(ctx, email)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +173,7 @@ func TestResetTokenIssuanceDoesNotReturnTokenOnCommitFailure(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	register(t, s, email)
+	registerVerified(t, s, email)
 	_, err := s.DB.ExecContext(ctx, `CREATE FUNCTION reject_token_commit() RETURNS trigger
 		LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'test commit failure'; END $$;
 		CREATE CONSTRAINT TRIGGER reject_token_commit AFTER INSERT OR UPDATE ON password_reset_tokens
@@ -178,7 +191,7 @@ func TestResetTokenConcurrentRedemption(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	email := uniqueName("email") + "@example.invalid"
-	name, _ := register(t, s, email)
+	name, _ := registerVerified(t, s, email)
 	token, err := s.IssueResetToken(ctx, email)
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +235,7 @@ func TestResetTokenReportsUncertainCommit(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, _ := register(t, s, email)
+	name, _ := registerVerified(t, s, email)
 	token, err := s.IssueResetToken(ctx, email)
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +259,7 @@ func TestResetTokenRollbackPreservesTokenAndSessions(t *testing.T) {
 	s, _ := newTestService(t)
 	ctx := context.Background()
 	email := uniqueName("email") + "@example.invalid"
-	name, _ := register(t, s, email)
+	name, _ := registerVerified(t, s, email)
 	session, err := s.Login(ctx, name, "password123")
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +297,7 @@ func TestResetTokenExpiresWhileWaitingForAccountLock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	email := uniqueName("email") + "@example.invalid"
-	_, id := register(t, s, email)
+	_, id := registerVerified(t, s, email)
 	token, err := s.IssueResetToken(ctx, email)
 	if err != nil {
 		t.Fatal(err)

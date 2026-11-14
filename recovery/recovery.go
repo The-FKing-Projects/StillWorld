@@ -13,9 +13,10 @@ import (
 	"strings"
 )
 
-// Sender delivers a reset code and a link that does not contain the code.
+// Sender delivers codes and links that do not contain the codes.
 type Sender interface {
 	SendReset(context.Context, string, string, string) error
+	SendVerification(context.Context, string, string, string) error
 }
 
 // Config enables self-service password recovery.
@@ -69,6 +70,11 @@ func (c Config) ValidateForCookies(insecureCookies bool) error {
 // ResetURL returns the configured reset page URL without a token.
 func (c Config) ResetURL() string {
 	return strings.TrimSuffix(c.PublicOrigin, "/") + "/reset-password"
+}
+
+// VerificationURL returns the configured verification page URL without a token.
+func (c Config) VerificationURL() string {
+	return strings.TrimSuffix(c.PublicOrigin, "/") + "/verify-email"
 }
 
 // FromEnv configures SMTP recovery, or returns nil when no recovery settings
