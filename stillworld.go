@@ -55,6 +55,8 @@ type Options struct {
 	Presentation presentation.Game
 	// Recovery enables opt-in self-service password recovery.
 	Recovery *recovery.Config
+	// SharedRateLimits stores authentication rate limits in the application database.
+	SharedRateLimits bool
 }
 
 // App owns the framework services for one database and one game.
@@ -106,10 +108,14 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	if options.Now != nil {
 		authService.Now = options.Now
 	}
+	httpOptions := web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation, Recovery: options.Recovery}
+	if options.SharedRateLimits {
+		httpOptions.SharedRateLimits = database
+	}
 	return &App{
 		database:   database,
 		gameID:     game.ID,
-		http:       web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation, Recovery: options.Recovery},
+		http:       httpOptions,
 		auth:       authService,
 		action:     engine,
 		migrations: game.Migrations,

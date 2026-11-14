@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -48,6 +49,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	sharedRateLimits := false
+	if value := os.Getenv("STILLWORLD_SHARED_RATE_LIMITS"); value != "" {
+		sharedRateLimits, err = strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("STILLWORLD_SHARED_RATE_LIMITS must be a boolean: %w", err)
+		}
+	}
 	migrations, err := fs.Sub(embeddedMigrations, "migrations")
 	if err != nil {
 		return fmt.Errorf("locate counter migrations: %w", err)
@@ -73,6 +81,7 @@ func run() error {
 		InsecureCookies:       true,
 		Presentation:          counterPresentation{database: database},
 		Recovery:              recoveryConfig,
+		SharedRateLimits:      sharedRateLimits,
 	})
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)

@@ -41,7 +41,8 @@ Status: draft. These are design decisions, not a finished specification.
 ## Still open
 
 - Self-service password recovery is optional and uses email codes, bounded
-  in-process admission, and generic request responses. Email addresses are not
+  admission (in memory by default or shared through PostgreSQL), and generic
+  request responses. Email addresses are not
   verified at signup, and these controls do not establish comprehensive
   enumeration or abuse resistance. Target-host Argon2id parameters remain open.
 - Main-executable configuration for choosing a downstream game and its Turns

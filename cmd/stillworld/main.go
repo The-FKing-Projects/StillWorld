@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"io"
@@ -98,9 +99,13 @@ func serve(stderr io.Writer) int {
 	}
 	go cleanupSessions(ctx, svc, stderr)
 
+	var limitsDB *sql.DB
+	if cfg.SharedRateLimits {
+		limitsDB = d
+	}
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           web.New(svc, web.Options{InsecureCookies: cfg.InsecureCookies, BehindProxy: cfg.BehindProxy, Recovery: recoveryConfig}).Handler(),
+		Handler:           web.New(svc, web.Options{InsecureCookies: cfg.InsecureCookies, BehindProxy: cfg.BehindProxy, Recovery: recoveryConfig, SharedRateLimits: limitsDB}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

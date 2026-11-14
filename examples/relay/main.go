@@ -66,6 +66,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	sharedRateLimits, err := boolEnv("STILLWORLD_SHARED_RATE_LIMITS")
+	if err != nil {
+		return err
+	}
 	migrations, err := fs.Sub(embeddedMigrations, "migrations")
 	if err != nil {
 		return fmt.Errorf("locate relay migrations: %w", err)
@@ -78,7 +82,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	defer database.Close()
 	database.SetMaxOpenConns(10)
 
-	app, err := newApplication(database, migrations, key, insecureCookies, behindProxy, recoveryConfig)
+	app, err := newApplication(database, migrations, key, insecureCookies, behindProxy, sharedRateLimits, recoveryConfig)
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)
 	}
@@ -127,7 +131,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	return nil
 }
 
-func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCookies, behindProxy bool, recoveryConfig *recovery.Config) (*stillworld.App, error) {
+func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCookies, behindProxy, sharedRateLimits bool, recoveryConfig *recovery.Config) (*stillworld.App, error) {
 	return stillworld.New(database, stillworld.Game{
 		ID:         "relay",
 		Migrations: migrations,
@@ -143,6 +147,7 @@ func newApplication(database *sql.DB, migrations fs.FS, key []byte, insecureCook
 		BehindProxy:           behindProxy,
 		Presentation:          relayPresentation{database: database},
 		Recovery:              recoveryConfig,
+		SharedRateLimits:      sharedRateLimits,
 	})
 }
 

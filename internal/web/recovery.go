@@ -24,21 +24,37 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	ipSlot := s.recoveryIP.reserve(s.clientIP(r))
+	ipSlot, err := s.recoveryIP.reserve(r.Context(), s.clientIP(r))
+	if err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
 	if ipSlot == nil {
 		http.Error(w, "too many requests; try again later", http.StatusTooManyRequests)
 		return
 	}
-	s.recoveryIP.finishCounted(ipSlot)
+	if err := s.recoveryIP.finish(ipSlot, true, false); err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
 	email := r.PostFormValue("email")
 	if len(r.PostForm["email"]) != 1 {
 		email = ""
 	}
 	select {
 	case s.recoverySlots <- struct{}{}:
-		emailSlot := s.recoveryEmail.reserve(strings.ToLower(email))
+		emailSlot, err := s.recoveryEmail.reserve(r.Context(), strings.ToLower(email))
+		if err != nil {
+			<-s.recoverySlots
+			rateLimitUnavailable(w, err)
+			return
+		}
 		if emailSlot != nil {
-			s.recoveryEmail.finishCounted(emailSlot)
+			if err := s.recoveryEmail.finish(emailSlot, true, false); err != nil {
+				<-s.recoverySlots
+				rateLimitUnavailable(w, err)
+				return
+			}
 			go s.deliverReset(email)
 		} else {
 			<-s.recoverySlots
@@ -80,12 +96,19 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form", http.StatusBadRequest)
 		return
 	}
-	ipSlot := s.resetIP.reserve(s.clientIP(r))
+	ipSlot, err := s.resetIP.reserve(r.Context(), s.clientIP(r))
+	if err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
 	if ipSlot == nil {
 		http.Error(w, "too many requests; try again later", http.StatusTooManyRequests)
 		return
 	}
-	s.resetIP.finishCounted(ipSlot)
+	if err := s.resetIP.finish(ipSlot, true, false); err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
 	if len(r.PostForm["code"]) != 1 || len(r.PostForm["password"]) != 1 ||
 		len(r.PostForm["confirm_password"]) != 1 || r.PostFormValue("password") != r.PostFormValue("confirm_password") {
 		s.resetResult(w, r, http.StatusBadRequest, "Check the code and matching passwords, then try again.", true)
@@ -102,7 +125,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		s.resetResult(w, r, http.StatusServiceUnavailable, "Password recovery is temporarily unavailable.", true)
 		return
 	}
-	err := service.RedeemResetToken(r.Context(), strings.TrimSpace(r.PostFormValue("code")), r.PostFormValue("password"))
+	err = service.RedeemResetToken(r.Context(), strings.TrimSpace(r.PostFormValue("code")), r.PostFormValue("password"))
 	switch {
 	case err == nil:
 		s.resetResult(w, r, http.StatusOK, "Your password has been changed. Sign in with your new password.", false)

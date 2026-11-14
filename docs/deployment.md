@@ -191,14 +191,31 @@ environment variables:
 | Concurrent recovery delivery attempts | 16; excess attempts are dropped and logged |
 | Password reset submissions per client IP | 20 per 15 minutes |
 
-These limits are per-process and in memory: they are not shared across servers
-or persisted in PostgreSQL, and restart with the process. Successful login
-clears the username failure counter. The password-hash work uses Argon2id with
+By default, these limits are per-process and in memory: they are not shared
+across servers and restart with the process. Successful login clears the
+username failure counter. The password-hash work uses Argon2id with
 64 MiB per operation by default, so four simultaneous operations can consume
 about 256 MiB for hashing alone, in addition to PostgreSQL, the application,
 and the operating system. Load-test the target host and monitor resource use;
 do not treat these initial limits as a guarantee of public-service capacity or
 abuse resistance.
+
+For shared, restart-persistent login, signup, and password recovery limits,
+apply the latest migrations and set `STILLWORLD_SHARED_RATE_LIMITS=true` on
+every instance using the same database schema. The public composition API can
+also enable `stillworld.Options.SharedRateLimits`. Instances using the default
+in-memory mode do not participate in the shared limits. Action limits,
+concurrent password-hash slots, and delivery slots always remain per-process.
+
+The shared store uses database time and fails closed with `503` if it is
+unavailable or its combined 100,000-key capacity is exhausted. It stores
+SHA-256 hashes of identifiers, not raw usernames, addresses, or IPs; hashes
+are not anonymization and database access still requires protection. Expired
+entries are removed in bounded batches as requests arrive and may remain
+stored during idle periods. A process that stops during an in-flight login may
+leave its reservation counted until the window expires. Admissions serialize
+on a database row, so monitor PostgreSQL and load-test before enabling this
+experimental option. Keep the migration in place while any instance uses it.
 
 On the target host, the optional `stillworld benchmark-password` command
 measures password hashing without connecting to a database. It defaults to
@@ -305,10 +322,10 @@ Request responses are generic for eligible and ineligible addresses. Delivery
 is asynchronous and best effort: limits, capacity, process shutdown, mail
 failures, or a full mailbox can prevent delivery. A newer code invalidates an
 older one. Monitor logs for recovery issuance, delivery, and capacity failures;
-logs intentionally omit addresses and codes. Limits are per-process and may
-prevent repeated requests for the same address for 10 minutes, including when
-delivery fails. They are not shared across instances or durable across
-restarts. The generic response and limits do not guarantee resistance to
+logs intentionally omit addresses and codes. Limits may prevent repeated
+requests for the same address for 10 minutes, including when delivery fails.
+They are per-process unless shared limits are enabled as described above.
+The generic response and limits do not guarantee resistance to
 enumeration or abuse, especially since signup currently reveals email
 conflicts. Signup does not verify email addresses: anyone controlling a
 registered address can reset that account, so do not enable recovery unless

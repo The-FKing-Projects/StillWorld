@@ -20,6 +20,8 @@ type Config struct {
 	// BehindProxy trusts the rightmost X-Forwarded-For entry as the client IP.
 	// Enable only when a reverse proxy you control sets that header.
 	BehindProxy bool
+	// SharedRateLimits stores authentication limits in PostgreSQL.
+	SharedRateLimits bool
 }
 
 // FromEnv reads configuration from environment variables.
@@ -41,6 +43,9 @@ func fromLookup(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.BehindProxy, err = boolVar(lookup, "STILLWORLD_BEHIND_PROXY"); err != nil {
+		return Config{}, err
+	}
+	if cfg.SharedRateLimits, err = boolVar(lookup, "STILLWORLD_SHARED_RATE_LIMITS"); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

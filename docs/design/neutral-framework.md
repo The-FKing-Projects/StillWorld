@@ -712,8 +712,9 @@ Implementation does not imply a stable API or a production-ready game.
   server-rendered forms; the counter example demonstrates integer input.
   Additional form fields and presentation remain future work.
 - Deployment guidance (#22) and authentication limitations (#23) are
-  documented; the in-memory rate limiter and lack of admin tooling remain
-  known operational limitations.
+  documented. Authentication limits default to in-memory counters, with an
+  optional PostgreSQL-backed shared store; action limits remain per-process.
+  Initial local administrator commands are available.
 - Continue to harden the public API and keep the separate-module example and
   PostgreSQL acceptance tests in the verification workflow.
 
