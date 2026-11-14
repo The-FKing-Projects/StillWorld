@@ -185,6 +185,7 @@ environment variables:
 | Concurrent login/signup password-hash work | 4 requests; excess requests receive `503` |
 | Failed logins per client IP | 20 failures per 15-minute window |
 | Signup requests per client IP | 5 per hour |
+| Deferred signup delivery attempts per email address | 1 per 10 minutes |
 | Deferred signup completion submissions per client IP | 20 per 15 minutes |
 | Password recovery requests per client IP | 10 per hour |
 | Password recovery requests per email address | 1 per 10 minutes |
@@ -323,7 +324,11 @@ code rather than assuming it failed.
 
 Password recovery requires a verified address. With email delivery configured,
 signup may include an optional email: `POST /signup` then returns a generic
-message and, when the address is eligible, emails a code. API clients complete
+message and, when the address is eligible and within the per-address delivery
+quota, emails a code. Repeated signup attempts for the same address within 10
+minutes still receive the generic success response but do not send another
+message or replace a pending code; this bound applies per process by default
+and across instances when shared rate limits are enabled. API clients complete
 registration with form-encoded `code` to `POST /complete-signup` (HTML form at
 `GET /complete-signup`). Completing signup creates the account with the address
 already verified. Players who signed up without email, or who still have an
@@ -355,10 +360,11 @@ older one. Monitor logs for recovery issuance, delivery, and capacity failures;
 logs intentionally omit addresses and codes. Limits may prevent repeated
 requests for the same address for 10 minutes, including when delivery fails.
 They are per-process unless shared limits are enabled as described above.
-The generic recovery response and limits do not guarantee resistance to
-enumeration or abuse. Deferred signup hides whether an email is registered in
-the HTTP response, but delivery timing and mailbox behavior can still leak
-information. Accounts without email, disabled accounts, and accounts unable to
+The generic recovery and deferred-signup responses and limits do not guarantee
+resistance to enumeration or abuse. Deferred signup hides whether an email is
+registered in the HTTP response, and the per-address signup delivery quota
+limits rotating-IP spam against one mailbox, but delivery timing and mailbox
+behavior can still leak information. Accounts without email, disabled accounts, and accounts unable to
 receive mail require administrator assistance.
 
 ## Backups and restore checks

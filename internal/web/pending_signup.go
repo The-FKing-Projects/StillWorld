@@ -17,6 +17,8 @@ type pendingSignupService interface {
 	CompletePendingSignup(context.Context, string) (int64, error)
 }
 
+const deferredSignupMessage = "If this address can be used, we will send a code to complete signup. Check your email."
+
 func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, email string) {
 	service, ok := s.auth.(pendingSignupService)
 	if !ok {
@@ -31,6 +33,24 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		s.deferredSignupResult(w, r, http.StatusServiceUnavailable, "Email delivery is busy. Try again.")
 		return
 	}
+	emailSlot, err := s.signupEmail.reserve(r.Context(), strings.ToLower(email))
+	if err != nil {
+		<-s.recoverySlots
+		rateLimitUnavailable(w, err)
+		return
+	}
+	if emailSlot == nil {
+		// Same generic success as a delivered signup so quota exhaustion does
+		// not reveal whether the address is registered or recently contacted.
+		<-s.recoverySlots
+		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
+		return
+	}
+	if err := s.signupEmail.finish(emailSlot, true, false); err != nil {
+		<-s.recoverySlots
+		rateLimitUnavailable(w, err)
+		return
+	}
 	code, address, err := service.StartPendingSignup(r.Context(), r.PostFormValue("username"), email, r.PostFormValue("password"))
 	switch {
 	case err == nil:
@@ -42,10 +62,10 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 				log.Print("signup delivery failed")
 			}
 		}()
-		s.deferredSignupResult(w, r, http.StatusOK, "If this address can be used, we will send a code to complete signup. Check your email.")
+		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
 	case errors.Is(err, auth.ErrPendingSignupUnavailable):
 		<-s.recoverySlots
-		s.deferredSignupResult(w, r, http.StatusOK, "If this address can be used, we will send a code to complete signup. Check your email.")
+		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
 	case errors.Is(err, auth.ErrInvalidInput):
 		<-s.recoverySlots
 		s.authError(w, r, "signup", strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)

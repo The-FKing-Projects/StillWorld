@@ -63,10 +63,12 @@ const (
 	maxActionsPerIP      = 120
 	maxActionsPerPlayer  = 60
 
-	loginWindow     = 15 * time.Minute
-	maxLoginFailsIP = 20
-	signupWindow    = time.Hour
-	maxSignupsIP    = 5
+	loginWindow       = 15 * time.Minute
+	maxLoginFailsIP   = 20
+	signupWindow      = time.Hour
+	maxSignupsIP      = 5
+	signupEmailLimit  = 1
+	signupEmailWindow = 10 * time.Minute
 )
 
 // Server serves the HTTP API.
@@ -77,6 +79,7 @@ type Server struct {
 	hashSlots            chan struct{}
 	loginIP              *authLimiter
 	signupIP             *authLimiter
+	signupEmail          *authLimiter
 	completeSignupIP     *authLimiter
 	actionIP             *authLimiter
 	actionUser           *authLimiter
@@ -108,6 +111,7 @@ func New(a Authenticator, opts Options) *Server {
 		hashSlots:            make(chan struct{}, maxConcurrentHashes),
 		loginIP:              newAuthLimiter(opts.SharedRateLimits, limitLoginIP, maxLoginFailsIP, loginWindow, opts.Now),
 		signupIP:             newAuthLimiter(opts.SharedRateLimits, limitSignupIP, maxSignupsIP, signupWindow, opts.Now),
+		signupEmail:          newAuthLimiter(opts.SharedRateLimits, limitSignupEmail, signupEmailLimit, signupEmailWindow, opts.Now),
 		completeSignupIP:     newAuthLimiter(opts.SharedRateLimits, limitCompleteSignupIP, 20, 15*time.Minute, opts.Now),
 		actionIP:             newAuthLimiter(opts.SharedRateLimits, limitActionIP, maxActionsPerIP, time.Minute, opts.Now),
 		actionUser:           newAuthLimiter(opts.SharedRateLimits, limitActionUser, maxActionsPerPlayer, time.Minute, opts.Now),

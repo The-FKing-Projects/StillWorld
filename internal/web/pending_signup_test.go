@@ -65,6 +65,40 @@ func TestDeferredSignupHidesEmailConflict(t *testing.T) {
 	}
 }
 
+func TestDeferredSignupEmailQuotaAcrossIPs(t *testing.T) {
+	database := testdb.Open(t)
+	service, err := auth.NewService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mails := make(chan resetMail, 2)
+	handler := New(service, Options{
+		Recovery:         &recovery.Config{PublicOrigin: "https://game.example", Sender: testSender{mails}},
+		SharedRateLimits: database,
+	}).Handler()
+	form := url.Values{"username": {"quota1"}, "email": {"quota@example.com"}, "password": {"password123"}}
+	first := post(handler, "/signup", form, func(r *http.Request) { r.RemoteAddr = "198.51.100.40:1" })
+	if first.Code != http.StatusOK {
+		t.Fatalf("first signup = %d %s", first.Code, first.Body)
+	}
+	select {
+	case <-mails:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected first signup mail")
+	}
+	second := post(handler, "/signup", url.Values{
+		"username": {"quota2"}, "email": {"QUOTA@example.com"}, "password": {"password123"},
+	}, func(r *http.Request) { r.RemoteAddr = "203.0.113.50:1" })
+	if second.Code != first.Code || second.Body.String() != first.Body.String() {
+		t.Fatalf("quota responses differ: %d %q vs %d %q", first.Code, first.Body, second.Code, second.Body)
+	}
+	select {
+	case <-mails:
+		t.Fatal("per-email signup quota allowed a second delivery")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestCompleteSignupDoesNotUseHashSlots(t *testing.T) {
 	database := testdb.Open(t)
 	service, err := auth.NewService(database)

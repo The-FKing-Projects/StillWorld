@@ -29,6 +29,7 @@ const (
 	limitActionIP
 	limitActionUser
 	limitCompleteSignupIP
+	limitSignupEmail
 )
 
 var errLimitCapacity = errors.New("shared rate limiter capacity exhausted")
