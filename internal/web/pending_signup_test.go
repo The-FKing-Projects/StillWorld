@@ -99,6 +99,48 @@ func TestDeferredSignupEmailQuotaAcrossIPs(t *testing.T) {
 	}
 }
 
+func TestDeferredSignupInvalidInputDoesNotBurnEmailQuota(t *testing.T) {
+	database := testdb.Open(t)
+	service, err := auth.NewService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Register(t.Context(), "takenuser", "owner@example.com", "password123"); err != nil {
+		t.Fatal(err)
+	}
+	mails := make(chan resetMail, 2)
+	handler := New(service, Options{
+		Recovery:         &recovery.Config{PublicOrigin: "https://game.example", Sender: testSender{mails}},
+		SharedRateLimits: database,
+	}).Handler()
+	badPassword := post(handler, "/signup", url.Values{
+		"username": {"legituser"}, "email": {"victim@example.com"}, "password": {"short"},
+	}, func(r *http.Request) { r.RemoteAddr = "198.51.100.60:1" })
+	if badPassword.Code != http.StatusBadRequest {
+		t.Fatalf("invalid password = %d %s", badPassword.Code, badPassword.Body)
+	}
+	takenUsername := post(handler, "/signup", url.Values{
+		"username": {"takenuser"}, "email": {"victim@example.com"}, "password": {"password123"},
+	}, func(r *http.Request) { r.RemoteAddr = "203.0.113.60:1" })
+	if takenUsername.Code != http.StatusConflict {
+		t.Fatalf("taken username = %d %s", takenUsername.Code, takenUsername.Body)
+	}
+	legit := post(handler, "/signup", url.Values{
+		"username": {"legituser"}, "email": {"victim@example.com"}, "password": {"password123"},
+	}, func(r *http.Request) { r.RemoteAddr = "198.51.100.61:1" })
+	if legit.Code != http.StatusOK || !strings.Contains(legit.Body.String(), "Check your email") {
+		t.Fatalf("legitimate signup after failed attempts = %d %s", legit.Code, legit.Body)
+	}
+	select {
+	case mail := <-mails:
+		if mail.to != "victim@example.com" {
+			t.Fatalf("unexpected mail: %+v", mail)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("invalid attempts burned the email delivery quota")
+	}
+}
+
 func TestCompleteSignupDoesNotUseHashSlots(t *testing.T) {
 	database := testdb.Open(t)
 	service, err := auth.NewService(database)

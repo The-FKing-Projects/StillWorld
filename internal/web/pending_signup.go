@@ -46,14 +46,22 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
 		return
 	}
-	if err := s.signupEmail.finish(emailSlot, true, false); err != nil {
-		<-s.recoverySlots
-		rateLimitUnavailable(w, err)
-		return
+	// Hold the reservation as pending until StartPendingSignup succeeds so
+	// invalid input or username conflicts do not burn the delivery quota.
+	releaseEmail := func(charge bool) bool {
+		if err := s.signupEmail.finish(emailSlot, charge, false); err != nil {
+			<-s.recoverySlots
+			rateLimitUnavailable(w, err)
+			return false
+		}
+		return true
 	}
 	code, address, err := service.StartPendingSignup(r.Context(), r.PostFormValue("username"), email, r.PostFormValue("password"))
 	switch {
 	case err == nil:
+		if !releaseEmail(true) {
+			return
+		}
 		go func() {
 			defer func() { <-s.recoverySlots }()
 			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
@@ -64,15 +72,27 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		}()
 		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
 	case errors.Is(err, auth.ErrPendingSignupUnavailable):
+		if !releaseEmail(false) {
+			return
+		}
 		<-s.recoverySlots
 		s.deferredSignupResult(w, r, http.StatusOK, deferredSignupMessage)
 	case errors.Is(err, auth.ErrInvalidInput):
+		if !releaseEmail(false) {
+			return
+		}
 		<-s.recoverySlots
 		s.authError(w, r, "signup", strings.TrimPrefix(err.Error(), auth.ErrInvalidInput.Error()+": "), http.StatusBadRequest)
 	case errors.Is(err, auth.ErrUsernameTaken):
+		if !releaseEmail(false) {
+			return
+		}
 		<-s.recoverySlots
 		s.authError(w, r, "signup", "username already taken", http.StatusConflict)
 	default:
+		if !releaseEmail(false) {
+			return
+		}
 		<-s.recoverySlots
 		log.Print("deferred signup failed")
 		http.Error(w, "internal error", http.StatusInternalServerError)

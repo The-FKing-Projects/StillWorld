@@ -367,7 +367,8 @@ They are per-process unless shared limits are enabled as described above.
 The generic recovery and deferred-signup responses and limits do not guarantee
 resistance to enumeration or abuse. Deferred signup hides whether an email is
 registered in the HTTP response, and the per-address signup delivery quota
-limits rotating-IP spam against one mailbox, but delivery timing and mailbox
+(charged only when a pending signup is scheduled) limits rotating-IP spam
+against one mailbox, but delivery timing and mailbox
 behavior can still leak information. Accounts without email, disabled accounts, and accounts unable to
 receive mail require administrator assistance.
 
