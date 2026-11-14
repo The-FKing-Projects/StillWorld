@@ -328,7 +328,11 @@ message and, when the address is eligible and within the per-address delivery
 quota, emails a code. Repeated signup attempts for the same address within 10
 minutes still receive the generic success response but do not send another
 message or replace a pending code; this bound applies per process by default
-and across instances when shared rate limits are enabled. API clients complete
+and across instances when shared rate limits are enabled. Expired pending
+signup rows (including stored password hashes) are removed in bounded batches
+by the hourly maintenance loop alongside session cleanup; games using the
+composition API should call `CleanupExpiredPendingSignups` on the same
+schedule as outcome cleanup. API clients complete
 registration with form-encoded `code` to `POST /complete-signup` (HTML form at
 `GET /complete-signup`). Completing signup creates the account with the address
 already verified. Players who signed up without email, or who still have an

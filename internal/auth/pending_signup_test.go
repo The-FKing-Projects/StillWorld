@@ -120,3 +120,37 @@ func TestPendingSignupInvalidInput(t *testing.T) {
 		t.Fatalf("short code: %v", err)
 	}
 }
+
+func TestDeleteExpiredPendingSignupsIsBounded(t *testing.T) {
+	database := testdb.Open(t)
+	service, err := NewService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, _, err := service.StartPendingSignup(ctx, uniqueName("p"),
+			uniqueName("p")+"@example.com", "password123"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := database.ExecContext(ctx, `UPDATE pending_signups
+		SET expires_at = clock_timestamp() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.DeleteExpiredPendingSignups(ctx, 0); err == nil {
+		t.Fatal("accepted zero batch")
+	}
+	deleted, err := service.DeleteExpiredPendingSignups(ctx, 2)
+	if err != nil || deleted != 2 {
+		t.Fatalf("first cleanup deleted %d: %v", deleted, err)
+	}
+	deleted, err = service.DeleteExpiredPendingSignups(ctx, 2)
+	if err != nil || deleted != 1 {
+		t.Fatalf("second cleanup deleted %d: %v", deleted, err)
+	}
+	var remaining int
+	if err := database.QueryRowContext(ctx, `SELECT count(*) FROM pending_signups`).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("remaining pending signups = %d: %v", remaining, err)
+	}
+}

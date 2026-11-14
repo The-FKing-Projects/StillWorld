@@ -12,7 +12,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const pendingSignupLifetime = 30 * time.Minute
+const (
+	pendingSignupLifetime   = 30 * time.Minute
+	pendingSignupPurgeBatch = 64
+	maxPendingSignupCleanup = 1000
+)
 
 var (
 	// ErrPendingSignupUnavailable means the address already belongs to an
@@ -47,7 +51,12 @@ func (s *Service) StartPendingSignup(ctx context.Context, username, email, passw
 	if err != nil {
 		return "", "", fmt.Errorf("begin pending signup: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_signups WHERE expires_at <= clock_timestamp()`); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM pending_signups
+		WHERE id IN (
+			SELECT id FROM pending_signups
+			WHERE expires_at <= clock_timestamp()
+			ORDER BY expires_at LIMIT $1
+		)`, pendingSignupPurgeBatch); err != nil {
 		return "", "", rollbackAuth(tx, fmt.Errorf("purge expired pending signups: %w", err))
 	}
 	var exists bool
@@ -133,4 +142,22 @@ func (s *Service) CompletePendingSignup(ctx context.Context, token string) (int6
 		return 0, fmt.Errorf("commit completed signup; check whether the account exists before retrying: %w", err)
 	}
 	return id, nil
+}
+
+// DeleteExpiredPendingSignups removes expired deferred signups in a bounded batch.
+// Call periodically from maintenance; batchSize must be between 1 and 1000.
+func (s *Service) DeleteExpiredPendingSignups(ctx context.Context, batchSize int) (int64, error) {
+	if batchSize < 1 || batchSize > maxPendingSignupCleanup {
+		return 0, fmt.Errorf("auth: pending signup cleanup batch must be between 1 and %d", maxPendingSignupCleanup)
+	}
+	result, err := s.DB.ExecContext(ctx, `DELETE FROM pending_signups
+		WHERE id IN (
+			SELECT id FROM pending_signups
+			WHERE expires_at <= clock_timestamp()
+			ORDER BY expires_at LIMIT $1
+		)`, batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired pending signups: %w", err)
+	}
+	return result.RowsAffected()
 }

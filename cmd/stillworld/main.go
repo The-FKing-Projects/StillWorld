@@ -97,7 +97,7 @@ func serve(stderr io.Writer) int {
 		fmt.Fprintln(stderr, "stillworld:", err)
 		return 1
 	}
-	go cleanupSessions(ctx, svc, stderr)
+	go cleanupAuth(ctx, svc, stderr)
 
 	var limitsDB *sql.DB
 	if cfg.SharedRateLimits {
@@ -131,7 +131,7 @@ func serve(stderr io.Writer) int {
 	return 0
 }
 
-func cleanupSessions(ctx context.Context, svc *auth.Service, stderr io.Writer) {
+func cleanupAuth(ctx context.Context, svc *auth.Service, stderr io.Writer) {
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
@@ -141,6 +141,9 @@ func cleanupSessions(ctx context.Context, svc *auth.Service, stderr io.Writer) {
 		case <-t.C:
 			if _, err := svc.DeleteExpiredSessions(ctx); err != nil {
 				fmt.Fprintln(stderr, "stillworld: session cleanup:", err)
+			}
+			if _, err := svc.DeleteExpiredPendingSignups(ctx, 100); err != nil {
+				fmt.Fprintln(stderr, "stillworld: pending signup cleanup:", err)
 			}
 		}
 	}
