@@ -196,6 +196,19 @@ and the operating system. Load-test the target host and monitor resource use;
 do not treat these initial limits as a guarantee of public-service capacity or
 abuse resistance.
 
+On the target host, the optional `stillworld benchmark-password` command
+measures password hashing without connecting to a database. It defaults to
+three sequential hashes with the current default parameters. For example,
+`stillworld benchmark-password -concurrency=4` measures batches of four
+simultaneous hashes, matching the server's current limit. Run it in a
+controlled environment: it consumes CPU and memory and can affect a running
+service. Use `-memory-kib`, `-iterations`, `-parallelism`, and `-samples` to
+compare settings; the command reports per-hash timings and estimated hashing
+memory. Measurements vary with load, and a few hundred milliseconds per hash
+is a starting target, not a security or capacity guarantee. The command does
+not change the application configuration; Argon2id parameters are currently
+compiled defaults. Do not lower them solely to hit a timing target.
+
 The per-username login limit can be deliberately exhausted by someone who
 knows a username, preventing that account from logging in until its 15-minute
 window expires. Signup returns distinct errors for an already-used username
@@ -205,8 +218,31 @@ that signal while signup immediately creates usable accounts: attempting to
 log in with the submitted credentials reveals whether creation succeeded, and
 retrying a successful signup reveals the username conflict. Email verification
 or another flow change would be needed to avoid those signals; signup does not
-currently verify email addresses. There are also no administrator commands or
-endpoints to list or disable accounts or reset passwords.
+currently verify email addresses. There is no administrator command or endpoint
+to disable accounts.
+
+An administrator with database access can list account IDs and usernames with
+`stillworld list-accounts`, using `STILLWORLD_DATABASE_URL` from the protected
+service environment. It omits email addresses and prints usernames as quoted,
+escaped strings. The command displays up to 100 accounts per page;
+follow its `-after` hint to continue, or set `-limit` from 1 to 1000. Treat
+the output as account data and protect it accordingly.
+
+An administrator with access to the application database can reset an
+account's password locally:
+
+```sh
+stillworld reset-password USERNAME
+```
+
+Set `STILLWORLD_DATABASE_URL` through the protected service environment first.
+The command requires an interactive terminal and prompts twice without echoing
+the password; do not put a password in shell arguments, logs, or scripts. A
+successful reset revokes that account's existing sessions. Requests already
+authenticated before the reset may still finish. If the command reports an
+unknown outcome, retry with the same password; do not assume the reset failed.
+This is an administrative recovery mechanism, not an email-based self-service
+reset; independently verify the account owner's identity before using it.
 
 ## Backups and restore checks
 

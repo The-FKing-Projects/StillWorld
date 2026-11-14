@@ -29,11 +29,13 @@ const (
 )
 
 var (
-	ErrInvalidInput       = errors.New("auth: invalid input")
-	ErrUsernameTaken      = errors.New("auth: username already taken")
-	ErrEmailTaken         = errors.New("auth: email already in use")
-	ErrInvalidCredentials = errors.New("auth: invalid username or password")
-	ErrNoSession          = errors.New("auth: no valid session")
+	ErrInvalidInput        = errors.New("auth: invalid input")
+	ErrUsernameTaken       = errors.New("auth: username already taken")
+	ErrEmailTaken          = errors.New("auth: email already in use")
+	ErrInvalidCredentials  = errors.New("auth: invalid username or password")
+	ErrNoSession           = errors.New("auth: no valid session")
+	ErrAccountNotFound     = errors.New("auth: account not found")
+	ErrResetOutcomeUnknown = errors.New("auth: password reset outcome unknown; retry with the same password")
 
 	usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 )
@@ -95,8 +97,8 @@ func (s *Service) Register(ctx context.Context, username, email, password string
 	if !usernamePattern.MatchString(username) {
 		return 0, fmt.Errorf("%w: username must be 3-32 letters, digits, underscores, or hyphens", ErrInvalidInput)
 	}
-	if utf8.RuneCountInString(password) < minPasswordLen || len(password) > maxPasswordBytes {
-		return 0, fmt.Errorf("%w: password must be %d-%d characters", ErrInvalidInput, minPasswordLen, maxPasswordBytes)
+	if err := validatePassword(password); err != nil {
+		return 0, err
 	}
 	var emailArg any
 	if email != "" {
@@ -155,19 +157,87 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", ErrInvalidCredentials
 	}
 
+	return s.createSession(ctx, id, hash)
+}
+
+func (s *Service) createSession(ctx context.Context, id int64, verifiedHash string) (string, error) {
 	token, err := newToken()
 	if err != nil {
 		return "", err
 	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin session transaction: %w", err)
+	}
+	var currentHash string
+	// Serialize session creation with resets, then recheck the hash verified above.
+	err = tx.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1 FOR SHARE`, id).Scan(&currentHash)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && currentHash != verifiedHash) {
+		return "", rollbackAuth(tx, ErrInvalidCredentials)
+	}
+	if err != nil {
+		return "", rollbackAuth(tx, fmt.Errorf("lock account for login: %w", err))
+	}
 	now := s.Now()
-	_, err = s.DB.ExecContext(ctx,
+	_, err = tx.ExecContext(ctx,
 		`INSERT INTO sessions (token_hash, account_id, created_at, last_seen_at, expires_at)
 		 VALUES ($1, $2, $3, $3, $4)`,
 		hashToken(token), id, now, now.Add(IdleTimeout))
 	if err != nil {
-		return "", fmt.Errorf("insert session: %w", err)
+		return "", rollbackAuth(tx, fmt.Errorf("insert session: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit session: %w", err)
 	}
 	return token, nil
+}
+
+// ResetPassword replaces an account password and revokes its sessions atomically.
+func (s *Service) ResetPassword(ctx context.Context, username, password string) error {
+	if !usernamePattern.MatchString(username) {
+		return fmt.Errorf("%w: invalid username", ErrInvalidInput)
+	}
+	if err := validatePassword(password); err != nil {
+		return err
+	}
+	hash, err := HashPassword(password, s.params)
+	if err != nil {
+		return err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin password reset: %w", err)
+	}
+	var id int64
+	err = tx.QueryRowContext(ctx, `UPDATE accounts SET password_hash = $1
+		WHERE lower(username) = lower($2) RETURNING id`, hash, username).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return rollbackAuth(tx, ErrAccountNotFound)
+	}
+	if err != nil {
+		return rollbackAuth(tx, fmt.Errorf("update password: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("revoke sessions: %w", err))
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: commit password reset: %w", ErrResetOutcomeUnknown, err)
+	}
+	return nil
+}
+
+func validatePassword(password string) error {
+	if utf8.RuneCountInString(password) < minPasswordLen || len(password) > maxPasswordBytes {
+		return fmt.Errorf("%w: password must be %d-%d characters", ErrInvalidInput, minPasswordLen, maxPasswordBytes)
+	}
+	return nil
+}
+
+func rollbackAuth(tx *sql.Tx, cause error) error {
+	if err := tx.Rollback(); err != nil && !errors.Is(err, sql.ErrTxDone) {
+		return errors.Join(cause, fmt.Errorf("rollback auth transaction: %w", err))
+	}
+	return cause
 }
 
 // Authenticate validates a session token and extends its idle expiry, never

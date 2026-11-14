@@ -34,7 +34,7 @@ var errInvalidHash = errors.New("auth: invalid password hash encoding")
 
 // HashPassword returns a PHC-formatted Argon2id hash of password.
 func HashPassword(password string, p Params) (string, error) {
-	if !validParams(p) {
+	if !ValidParams(p) {
 		return "", errors.New("auth: invalid Argon2id parameters")
 	}
 	salt := make([]byte, saltLen)
@@ -48,7 +48,8 @@ func HashPassword(password string, p Params) (string, error) {
 		base64.RawStdEncoding.EncodeToString(key)), nil
 }
 
-func validParams(p Params) bool {
+// ValidParams reports whether p is within the supported Argon2id bounds.
+func ValidParams(p Params) bool {
 	return p.Parallelism > 0 && p.Parallelism <= maxParallelism &&
 		p.Iterations > 0 && p.Iterations <= maxIterations &&
 		p.MemoryKiB >= 8*uint32(p.Parallelism) && p.MemoryKiB <= maxMemoryKiB
@@ -75,7 +76,7 @@ func VerifyPassword(password, encoded string) (bool, error) {
 		return false, errInvalidHash
 	}
 	p.Parallelism = uint8(par)
-	if !validParams(p) || parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", p.MemoryKiB, p.Iterations, p.Parallelism) {
+	if !ValidParams(p) || parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", p.MemoryKiB, p.Iterations, p.Parallelism) {
 		return false, errInvalidHash
 	}
 	salt, err := base64.RawStdEncoding.DecodeString(parts[4])

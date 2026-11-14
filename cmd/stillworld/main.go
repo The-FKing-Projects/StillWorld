@@ -42,8 +42,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return migrate(stderr)
 	case "serve":
 		return serve(stderr)
+	case "benchmark-password":
+		return benchmarkPassword(fs.Args()[1:], stdout, stderr, auth.HashPassword)
+	case "reset-password":
+		return resetPassword(fs.Args()[1:], os.Stdin, stdout, stderr)
+	case "list-accounts":
+		return listAccounts(fs.Args()[1:], stdout, stderr)
 	case "":
-		fmt.Fprintln(stderr, "stillworld: available commands: migrate, serve")
+		fmt.Fprintln(stderr, "stillworld: available commands: migrate, serve, benchmark-password, reset-password, list-accounts")
 		return 1
 	default:
 		fmt.Fprintf(stderr, "stillworld: unknown command %q\n", fs.Arg(0))
