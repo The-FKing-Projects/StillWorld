@@ -218,15 +218,14 @@ that signal while signup immediately creates usable accounts: attempting to
 log in with the submitted credentials reveals whether creation succeeded, and
 retrying a successful signup reveals the username conflict. Email verification
 or another flow change would be needed to avoid those signals; signup does not
-currently verify email addresses. There is no administrator command or endpoint
-to disable accounts.
+currently verify email addresses.
 
-An administrator with database access can list account IDs and usernames with
-`stillworld list-accounts`, using `STILLWORLD_DATABASE_URL` from the protected
-service environment. It omits email addresses and prints usernames as quoted,
-escaped strings. The command displays up to 100 accounts per page;
-follow its `-after` hint to continue, or set `-limit` from 1 to 1000. Treat
-the output as account data and protect it accordingly.
+An administrator with database access can list account IDs, usernames, and
+account status with `stillworld list-accounts`, using `STILLWORLD_DATABASE_URL`
+from the protected service environment. It omits email addresses and prints
+usernames as quoted, escaped strings. The command displays up to 100 accounts
+per page; follow its `-after` hint to continue, or set `-limit` from 1 to 1000.
+Treat the output as account data and protect it accordingly.
 
 An administrator with access to the application database can reset an
 account's password locally:
@@ -243,6 +242,15 @@ authenticated before the reset may still finish. If the command reports an
 unknown outcome, retry with the same password; do not assume the reset failed.
 This is an administrative recovery mechanism, not an email-based self-service
 reset; independently verify the account owner's identity before using it.
+
+Use `stillworld disable-account USERNAME` to prevent login and revoke existing
+sessions, and `stillworld enable-account USERNAME` to allow login again.
+Enabling does not restore revoked sessions. Requests authenticated before a
+disable may still finish. If a status change reports an unknown outcome,
+check `list-accounts` before retrying. Apply the latest framework migrations
+using the appropriate game migration command before deploying this version.
+Stop older application instances before using these controls: older versions
+do not enforce the disabled status.
 
 ## Backups and restore checks
 

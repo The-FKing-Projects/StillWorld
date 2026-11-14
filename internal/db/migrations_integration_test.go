@@ -3,12 +3,45 @@ package db_test
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"testing/fstest"
 
 	"github.com/The-FKing-Projects/StillWorld/internal/db"
 	"github.com/The-FKing-Projects/StillWorld/internal/testdb"
+	"github.com/pressly/goose/v3"
 )
+
+func TestAccountDisablingMigrationUpgradeAndGuardedDowngrade(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.Open(t)
+	provider, err := goose.NewProvider(goose.DialectPostgres, d, os.DirFS("migrations"), goose.WithTableName("goose_db_version"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(ctx, `INSERT INTO accounts (username, password_hash) VALUES ('migration_player', 'hash')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Down(ctx); err != nil {
+		t.Fatalf("downgrade with active accounts: %v", err)
+	}
+	if err := db.Migrate(ctx, d); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	var active bool
+	if err := d.QueryRowContext(ctx, `SELECT disabled_at IS NULL FROM accounts WHERE username = 'migration_player'`).Scan(&active); err != nil || !active {
+		t.Fatalf("existing account after upgrade: active=%v error=%v", active, err)
+	}
+	if _, err := d.ExecContext(ctx, `UPDATE accounts SET disabled_at = now() WHERE username = 'migration_player'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Down(ctx); err == nil {
+		t.Fatal("downgrade succeeded while an account was disabled")
+	}
+	if err := d.QueryRowContext(ctx, `SELECT disabled_at IS NOT NULL FROM accounts WHERE username = 'migration_player'`).Scan(&active); err != nil || !active {
+		t.Fatalf("disabled account changed after rejected downgrade: disabled=%v error=%v", active, err)
+	}
+}
 
 func TestGameMigrationCoordinationAndBinding(t *testing.T) {
 	ctx := context.Background()

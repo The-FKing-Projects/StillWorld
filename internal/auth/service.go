@@ -29,13 +29,14 @@ const (
 )
 
 var (
-	ErrInvalidInput        = errors.New("auth: invalid input")
-	ErrUsernameTaken       = errors.New("auth: username already taken")
-	ErrEmailTaken          = errors.New("auth: email already in use")
-	ErrInvalidCredentials  = errors.New("auth: invalid username or password")
-	ErrNoSession           = errors.New("auth: no valid session")
-	ErrAccountNotFound     = errors.New("auth: account not found")
-	ErrResetOutcomeUnknown = errors.New("auth: password reset outcome unknown; retry with the same password")
+	ErrInvalidInput         = errors.New("auth: invalid input")
+	ErrUsernameTaken        = errors.New("auth: username already taken")
+	ErrEmailTaken           = errors.New("auth: email already in use")
+	ErrInvalidCredentials   = errors.New("auth: invalid username or password")
+	ErrNoSession            = errors.New("auth: no valid session")
+	ErrAccountNotFound      = errors.New("auth: account not found")
+	ErrResetOutcomeUnknown  = errors.New("auth: password reset outcome unknown; retry with the same password")
+	ErrAccountStatusUnknown = errors.New("auth: account status outcome unknown; inspect the account before retrying")
 
 	usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 )
@@ -140,7 +141,7 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 	var id int64
 	var hash string
 	err := s.DB.QueryRowContext(ctx,
-		`SELECT id, password_hash FROM accounts WHERE lower(username) = lower($1)`, username).Scan(&id, &hash)
+		`SELECT id, password_hash FROM accounts WHERE lower(username) = lower($1) AND disabled_at IS NULL`, username).Scan(&id, &hash)
 	found := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("look up account: %w", err)
@@ -170,8 +171,8 @@ func (s *Service) createSession(ctx context.Context, id int64, verifiedHash stri
 		return "", fmt.Errorf("begin session transaction: %w", err)
 	}
 	var currentHash string
-	// Serialize session creation with resets, then recheck the hash verified above.
-	err = tx.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1 FOR SHARE`, id).Scan(&currentHash)
+	// Serialize session creation with account changes, then recheck the verified hash.
+	err = tx.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR SHARE`, id).Scan(&currentHash)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && currentHash != verifiedHash) {
 		return "", rollbackAuth(tx, ErrInvalidCredentials)
 	}
@@ -226,6 +227,41 @@ func (s *Service) ResetPassword(ctx context.Context, username, password string) 
 	return nil
 }
 
+// SetAccountEnabled changes an account's status, revoking sessions when disabled.
+func (s *Service) SetAccountEnabled(ctx context.Context, username string, enabled bool) error {
+	if !usernamePattern.MatchString(username) {
+		return fmt.Errorf("%w: invalid username", ErrInvalidInput)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin account status change: %w", err)
+	}
+	var id int64
+	var wasDisabled bool
+	err = tx.QueryRowContext(ctx, `SELECT id, disabled_at IS NOT NULL FROM accounts
+		WHERE lower(username) = lower($1) FOR UPDATE`, username).Scan(&id, &wasDisabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return rollbackAuth(tx, ErrAccountNotFound)
+	}
+	if err != nil {
+		return rollbackAuth(tx, fmt.Errorf("lock account for status change: %w", err))
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts
+		SET disabled_at = CASE WHEN $1 THEN NULL ELSE COALESCE(disabled_at, clock_timestamp()) END
+		WHERE id = $2`, enabled, id); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("update account status: %w", err))
+	}
+	if !enabled || wasDisabled {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, id); err != nil {
+			return rollbackAuth(tx, fmt.Errorf("revoke sessions: %w", err))
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: commit account status change: %w", ErrAccountStatusUnknown, err)
+	}
+	return nil
+}
+
 func validatePassword(password string) error {
 	if utf8.RuneCountInString(password) < minPasswordLen || len(password) > maxPasswordBytes {
 		return fmt.Errorf("%w: password must be %d-%d characters", ErrInvalidInput, minPasswordLen, maxPasswordBytes)
@@ -253,7 +289,8 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Account, erro
 		                               created_at + $4 * interval '1 second')
 		      WHERE token_hash = $1 AND expires_at > $2
 		  RETURNING account_id)
-		 SELECT a.id, a.username FROM accounts a JOIN s ON s.account_id = a.id`,
+		 SELECT a.id, a.username FROM accounts a JOIN s ON s.account_id = a.id
+		  WHERE a.disabled_at IS NULL`,
 		hashToken(token), now, IdleTimeout.Seconds(), MaxLifetime.Seconds(),
 	).Scan(&acct.ID, &acct.Username)
 	if errors.Is(err, sql.ErrNoRows) {

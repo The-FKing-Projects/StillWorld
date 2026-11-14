@@ -46,7 +46,7 @@ func TestWriteAccountsPagination(t *testing.T) {
 	if err != nil || next != ids[1] {
 		t.Fatalf("first page next=%d error=%v", next, err)
 	}
-	want := fmt.Sprintf("ID\tUSERNAME\n%d\t%q\n%d\t%q\n", ids[0], names[0], ids[1], names[1])
+	want := fmt.Sprintf("ID\tUSERNAME\tSTATUS\n%d\t%q\tactive\n%d\t%q\tactive\n", ids[0], names[0], ids[1], names[1])
 	if out.String() != want {
 		t.Fatalf("first page = %q, want %q", out.String(), want)
 	}
@@ -55,13 +55,16 @@ func TestWriteAccountsPagination(t *testing.T) {
 		t.Fatal("account listing exposed private data or terminal control characters")
 	}
 	out.Reset()
+	if _, err := database.ExecContext(ctx, `UPDATE accounts SET disabled_at = now() WHERE id = $1`, ids[2]); err != nil {
+		t.Fatal(err)
+	}
 	next, err = writeAccounts(ctx, database, next, 2, &out)
-	if err != nil || next != 0 || out.String() != fmt.Sprintf("ID\tUSERNAME\n%d\t%q\n", ids[2], names[2]) {
+	if err != nil || next != 0 || out.String() != fmt.Sprintf("ID\tUSERNAME\tSTATUS\n%d\t%q\tdisabled\n", ids[2], names[2]) {
 		t.Fatalf("last page next=%d output=%q error=%v", next, out.String(), err)
 	}
 	out.Reset()
 	next, err = writeAccounts(ctx, database, ids[2], 2, &out)
-	if err != nil || next != 0 || out.String() != "ID\tUSERNAME\n" {
+	if err != nil || next != 0 || out.String() != "ID\tUSERNAME\tSTATUS\n" {
 		t.Fatalf("empty page next=%d output=%q error=%v", next, out.String(), err)
 	}
 }

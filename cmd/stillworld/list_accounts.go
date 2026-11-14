@@ -61,12 +61,12 @@ func writeAccounts(ctx context.Context, database *sql.DB, after int64, limit int
 		return 0, errors.New("invalid account listing arguments")
 	}
 	rows, err := database.QueryContext(ctx,
-		`SELECT id, username FROM accounts WHERE id > $1 ORDER BY id LIMIT $2`, after, limit+1)
+		`SELECT id, username, disabled_at IS NULL FROM accounts WHERE id > $1 ORDER BY id LIMIT $2`, after, limit+1)
 	if err != nil {
 		return 0, fmt.Errorf("query accounts: %w", err)
 	}
 	defer rows.Close()
-	if _, err := fmt.Fprintln(output, "ID\tUSERNAME"); err != nil {
+	if _, err := fmt.Fprintln(output, "ID\tUSERNAME\tSTATUS"); err != nil {
 		return 0, fmt.Errorf("write account listing: %w", err)
 	}
 	var lastID int64
@@ -79,10 +79,15 @@ func writeAccounts(ctx context.Context, database *sql.DB, after int64, limit int
 		}
 		var id int64
 		var username string
-		if err := rows.Scan(&id, &username); err != nil {
+		var active bool
+		if err := rows.Scan(&id, &username, &active); err != nil {
 			return 0, fmt.Errorf("read account: %w", err)
 		}
-		if _, err := fmt.Fprintf(output, "%d\t%q\n", id, username); err != nil {
+		status := "disabled"
+		if active {
+			status = "active"
+		}
+		if _, err := fmt.Fprintf(output, "%d\t%q\t%s\n", id, username, status); err != nil {
 			return 0, fmt.Errorf("write account listing: %w", err)
 		}
 		lastID = id
