@@ -76,13 +76,13 @@ func TestTOTPHTTPLoginFlow(t *testing.T) {
 	login := post(handler, "/login", url.Values{
 		"username": {"totpuser"}, "password": {"password123"},
 	}, nil)
-	if login.Code != http.StatusUnauthorized || !strings.Contains(login.Body.String(), "totp required") {
+	if login.Code != http.StatusUnauthorized || !strings.Contains(login.Body.String(), "second factor required") {
 		t.Fatalf("login = %d %s", login.Code, login.Body)
 	}
 	challenge := ""
 	for _, line := range strings.Split(login.Body.String(), "\n") {
 		line = strings.TrimSpace(line)
-		if line != "" && line != "totp required" {
+		if line != "" && line != "second factor required" {
 			challenge = line
 			break
 		}

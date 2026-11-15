@@ -122,13 +122,43 @@ func (s *Server) finishLoginSecondFactor(w http.ResponseWriter, r *http.Request,
 }
 
 func (s *Server) totpLoginError(w http.ResponseWriter, r *http.Request, message string, status int) {
-	if !s.htmlForm(r) {
+	if !s.htmlForm(r) && !wantsHTMLRedirect(r) {
 		http.Error(w, message, status)
 		return
 	}
-	renderHTML(w, status, htmlPage{
-		Title: "Two-factor authentication", AuthKind: "login/totp", Message: message,
-	})
+	page := s.secondFactorPage(r, message)
+	page.Message = message
+	renderHTML(w, status, page)
+}
+
+func (s *Server) secondFactorInfo(r *http.Request) auth.SecondFactorInfo {
+	info := auth.SecondFactorInfo{TOTP: s.totp() != nil}
+	if svc := s.webauthn(); svc != nil {
+		if token := s.challengeToken(r); token != "" {
+			if factors, err := svc.LoginChallengeFactors(r.Context(), token); err == nil {
+				return factors
+			}
+		}
+	}
+	return info
+}
+
+func (s *Server) secondFactorPage(r *http.Request, _ string) htmlPage {
+	info := s.secondFactorInfo(r)
+	desc := "Complete sign-in with a second factor."
+	switch {
+	case info.TOTP && info.Passkey:
+		desc = "Enter an authenticator code or recovery code, or use a registered passkey."
+	case info.Passkey && !info.TOTP:
+		desc = "Use a registered passkey to finish sign-in."
+	case info.TOTP:
+		desc = "Enter the code from your authenticator app, or a one-time recovery code."
+	}
+	return htmlPage{
+		Title: "Two-factor authentication", Description: desc,
+		AuthKind: "login/totp", CanPasskey: info.Passkey, CanTOTP: info.TOTP,
+		PasskeyCeremony: info.Passkey,
+	}
 }
 
 func (s *Server) handleHTMLLoginTOTP(w http.ResponseWriter, r *http.Request) {
@@ -136,11 +166,7 @@ func (s *Server) handleHTMLLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
-	renderHTML(w, http.StatusOK, htmlPage{
-		Title:       "Two-factor authentication",
-		Description: "Enter the code from your authenticator app, or a one-time recovery code.",
-		AuthKind:    "login/totp",
-	})
+	renderHTML(w, http.StatusOK, s.secondFactorPage(r, ""))
 }
 
 func (s *Server) requireAccount(w http.ResponseWriter, r *http.Request) (auth.Account, bool) {

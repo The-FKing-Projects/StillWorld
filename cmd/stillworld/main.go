@@ -105,6 +105,17 @@ func serve(stderr io.Writer) int {
 	if totpKeys != nil {
 		svc.SetTOTPKeys(totpKeys)
 	}
+	webAuthn, err := config.WebAuthnFromEnv()
+	if err != nil {
+		fmt.Fprintln(stderr, "stillworld:", err)
+		return 1
+	}
+	if webAuthn != nil {
+		if err := svc.SetWebAuthn(webAuthn); err != nil {
+			fmt.Fprintln(stderr, "stillworld:", err)
+			return 1
+		}
+	}
 	go cleanupAuth(ctx, svc, stderr)
 
 	var limitsDB *sql.DB
@@ -155,6 +166,9 @@ func cleanupAuth(ctx context.Context, svc *auth.Service, stderr io.Writer) {
 			}
 			if _, err := svc.DeleteExpiredTOTPState(ctx); err != nil {
 				fmt.Fprintln(stderr, "stillworld: totp cleanup:", err)
+			}
+			if _, err := svc.DeleteExpiredWebAuthnState(ctx); err != nil {
+				fmt.Fprintln(stderr, "stillworld: webauthn cleanup:", err)
 			}
 		}
 	}

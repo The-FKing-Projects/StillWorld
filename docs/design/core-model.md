@@ -54,7 +54,16 @@ Status: draft. These are design decisions, not a finished specification.
   confirms a valid code first. Login becomes two steps when enabled: password,
   then TOTP or a hashed one-time recovery code. Verification uses a ±1 step
   window with replay protection. Code attempts share the login IP rate limit.
-  Passkeys (#16) remain after TOTP. Not production-ready.
+  Not production-ready.
+- **Optional passkeys are implemented (issue #16, decision A).** Per-account
+  WebAuthn credentials are a second factor only (not passwordless), using
+  `go-webauthn` with public credential rows and short-lived ceremony sessions.
+  Login reuses the TOTP `login_challenges` bridge; when both TOTP and a passkey
+  are enrolled, either factor may complete the challenge. Ceremony JavaScript
+  is confined to enrol/assert pages; game actions stay text-first without JS.
+  Relying Party ID and origins come from config (see
+  [deployment](../deployment.md#optional-passkeys-webauthn)). Not
+  production-ready.
 
 ## Still open
 
@@ -72,4 +81,3 @@ Status: draft. These are design decisions, not a finished specification.
 - Extend the initial HTML forms and result presentation as games need richer
   inputs and views; the Relay example demonstrates the shared HTML and JSON
   action pipeline.
-- Passkeys (#16) are not implemented; they are intended after TOTP (#15).

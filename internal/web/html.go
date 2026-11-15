@@ -34,25 +34,29 @@ type htmlForm struct {
 }
 
 type htmlPage struct {
-	Title         string
-	Description   string
-	Username      string
-	Turns         *int64
-	Sections      []presentation.Section
-	Forms         []htmlForm
-	AuthKind      string
-	Message       string
-	Recovery      bool
-	NoGame        bool
-	ResetDone     bool
-	RetryAction   string
-	RetryFields   url.Values
-	CanVerify     bool
-	CanTOTP       bool
-	VerifyPage    bool
-	Email         string
-	EmailVerified bool
-	TOTPURL       string
+	Title           string
+	Description     string
+	Username        string
+	Turns           *int64
+	Sections        []presentation.Section
+	Forms           []htmlForm
+	AuthKind        string
+	Message         string
+	Recovery        bool
+	NoGame          bool
+	ResetDone       bool
+	RetryAction     string
+	RetryFields     url.Values
+	CanVerify       bool
+	CanTOTP         bool
+	CanPasskey      bool // navigation link when WebAuthn is configured
+	PasskeyCeremony bool // emit ceremony JS + relaxed CSP (enrol/assert pages only)
+	PasskeyPage     bool
+	PasskeyDeleteID string
+	VerifyPage      bool
+	Email           string
+	EmailVerified   bool
+	TOTPURL         string
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -72,6 +76,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 </style></head><body><header>{{if .NoGame}}StillWorld{{else}}<a href="/">Game home</a>{{end}}{{if .Username}} <span>Signed in as {{.Username}}</span>
 {{if .CanVerify}} <a href="/verify-email">Email verification</a>{{end}}
 {{if .CanTOTP}} <a href="/totp">Authenticator</a>{{end}}
+{{if .CanPasskey}} <a href="/passkeys">Passkeys</a>{{end}}
 <form class="logout" method="post" action="/logout"><input type="hidden" name="_html" value="1"><button type="submit">Sign out</button></form>{{end}}</header>
 <main><h1>{{.Title}}</h1>{{if .Description}}<p>{{.Description}}</p>{{end}}{{if .Turns}}<p><strong>Available Turns:</strong> {{.Turns}}</p>{{end}}
 {{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
@@ -97,8 +102,8 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <label for="code">Signup code</label><input id="code" name="code" autocomplete="off" required maxlength="43">
 <p><button type="submit">Complete signup</button></p>
 {{else if eq .AuthKind "login/totp"}}
-<label for="code">Authentication code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="16">
-<p><button type="submit">Continue</button></p>
+{{if .CanTOTP}}<label for="code">Authentication code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="16">
+<p><button type="submit">Continue</button></p>{{else}}<p>Authenticator codes are not available for this sign-in.</p>{{end}}
 {{else if eq .AuthKind "totp/confirm"}}
 {{if .TOTPURL}}<p class="notice">otpauth URL (for authenticator apps that accept it): <span class="email">{{.TOTPURL}}</span></p>{{end}}
 <label for="code">Confirmation code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="6" minlength="6">
@@ -114,9 +119,12 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <label for="password">Password</label><input id="password" name="password" type="password" {{if eq .AuthKind "signup"}}autocomplete="new-password"{{else}}autocomplete="current-password"{{end}} required minlength="8">
 <p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p>{{end}}</form>
 {{if eq .AuthKind "login/totp"}}
+{{if .CanTOTP}}
 <form method="post" action="/login/recovery-code"><input type="hidden" name="_html" value="1">
 <label for="recovery-code">Recovery code</label><input id="recovery-code" name="code" autocomplete="off" required maxlength="16">
 <p><button type="submit">Use recovery code</button></p></form>
+{{end}}
+{{if .CanPasskey}}<p><button type="button" id="passkey-login">Use passkey</button></p><p id="passkey-status" class="notice" hidden role="status"></p>{{end}}
 <p><a href="/login">Return to sign in</a></p>
 {{else if eq .AuthKind "totp/begin"}}
 <form method="post" action="/totp/disable"><input type="hidden" name="_html" value="1">
@@ -130,6 +138,16 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 {{else if eq .AuthKind "complete-signup"}}<p>Need a new code? <a href="/signup">Start signup again</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>
 {{else}}<p><a href="/forgot-password">Request a new code</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}{{end}}
 {{if and .Recovery (not .AuthKind)}}<p>{{if .ResetDone}}<a href="/forgot-password">Request a new code</a>{{else}}<a href="/reset-password">Enter a reset code</a>{{end}}{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>{{end}}
+{{if .PasskeyPage}}
+<label for="label">Label (optional)</label><input id="label" name="label" maxlength="64" autocomplete="off">
+<p><button type="button" id="passkey-register">Register a passkey</button></p>
+<form method="post" action="/passkeys/delete"><input type="hidden" name="_html" value="1">
+<label for="id">Passkey id</label><input id="id" name="id" inputmode="numeric" required value="{{.PasskeyDeleteID}}">
+<label for="password">Current password</label><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8">
+<p><button type="submit">Remove passkey</button></p></form>
+<p id="passkey-status" class="notice" hidden role="status"></p>
+<p><a href="/">Return to the game</a></p>
+{{end}}
 {{range .Sections}}<section><h2>{{.Heading}}</h2><ul>{{range .Lines}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
 {{if .Forms}}<section><h2>Actions</h2><div class="actions">{{range .Forms}}{{$action := .Action}}<form method="post" action="/actions/{{.Action}}">
 <input type="hidden" name="request_id" value="{{.RequestID}}"><p>{{.Description}}</p>{{range .Numbers}}
@@ -137,8 +155,23 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <p><button type="submit">{{.Label}}</button></p></form>{{end}}</div></section>{{end}}
 {{if .RetryAction}}<form method="post" action="/actions/{{.RetryAction}}">{{range $name,$values := .RetryFields}}{{range $values}}<input type="hidden" name="{{$name}}" value="{{.}}">{{end}}{{end}}
 <button type="submit">Retry the original action</button></form>{{end}}
-{{if and (not .AuthKind) (not .Forms) (not .Recovery) (not .VerifyPage)}}<p><a href="/">Return to the game</a></p>{{end}}
-</main></body></html>`))
+{{if and (not .AuthKind) (not .Forms) (not .Recovery) (not .VerifyPage) (not .PasskeyPage)}}<p><a href="/">Return to the game</a></p>{{end}}
+</main>
+{{if .PasskeyCeremony}}<script>
+(function(){
+function b64urlToBuf(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';var bin=atob(s),buf=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);return buf.buffer}
+function bufToB64url(buf){var bytes=new Uint8Array(buf),s='';for(var i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function status(msg){var el=document.getElementById('passkey-status');if(!el)return;el.hidden=!msg;el.textContent=msg||''}
+function decodeCreate(opts){opts.publicKey.challenge=b64urlToBuf(opts.publicKey.challenge);opts.publicKey.user.id=b64urlToBuf(opts.publicKey.user.id);(opts.publicKey.excludeCredentials||[]).forEach(function(c){c.id=b64urlToBuf(c.id)});return opts.publicKey}
+function decodeRequest(opts){opts.publicKey.challenge=b64urlToBuf(opts.publicKey.challenge);(opts.publicKey.allowCredentials||[]).forEach(function(c){c.id=b64urlToBuf(c.id)});return opts.publicKey}
+function encodeCred(cred){return {id:cred.id,rawId:bufToB64url(cred.rawId),type:cred.type,response:{clientDataJSON:bufToB64url(cred.response.clientDataJSON),attestationObject:cred.response.attestationObject?bufToB64url(cred.response.attestationObject):undefined,authenticatorData:cred.response.authenticatorData?bufToB64url(cred.response.authenticatorData):undefined,signature:cred.response.signature?bufToB64url(cred.response.signature):undefined,userHandle:cred.response.userHandle?bufToB64url(cred.response.userHandle):undefined},clientExtensionResults:cred.getClientExtensionResults?cred.getClientExtensionResults():{},authenticatorAttachment:cred.authenticatorAttachment}}
+var reg=document.getElementById('passkey-register');
+if(reg){reg.addEventListener('click',async function(){status('Waiting for authenticator…');try{var begin=await fetch('/passkeys/begin',{method:'POST',credentials:'same-origin',headers:{'X-Stillworld-Request':'1'}});if(!begin.ok)throw new Error('begin failed');var opts=await begin.json();var cred=await navigator.credentials.create({publicKey:decodeCreate(opts)});var label=(document.getElementById('label')||{}).value||'';var body=new URLSearchParams();body.set('credential',JSON.stringify(encodeCred(cred)));body.set('label',label);body.set('_html','1');var finish=await fetch('/passkeys/finish',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Stillworld-Request':'1'},body:body.toString()});if(finish.redirected){location.href=finish.url;return}if(!finish.ok)throw new Error('finish failed');location.href='/passkeys'}catch(e){status('Passkey registration failed. Try again or use another device.')}})}
+var login=document.getElementById('passkey-login');
+if(login){login.addEventListener('click',async function(){status('Waiting for authenticator…');try{var begin=await fetch('/login/passkey/begin',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/x-www-form-urlencoded','X-Stillworld-Request':'1'},body:''});if(!begin.ok)throw new Error('begin failed');var opts=await begin.json();var cred=await navigator.credentials.get({publicKey:decodeRequest(opts)});var finish=await fetch('/login/passkey?_html=1',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Stillworld-Request':'1','Accept':'text/html'},body:JSON.stringify(encodeCred(cred))});if(finish.redirected){location.href=finish.url;return}if(!finish.ok)throw new Error('finish failed');location.href='/'}catch(e){status('Passkey sign-in failed. Try an authenticator code or recovery code if available.')}})}
+})();
+</script>{{end}}
+</body></html>`))
 
 var formFieldName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
 
@@ -164,7 +197,11 @@ func validatePageForms(forms []presentation.Form) error {
 
 func renderHTML(w http.ResponseWriter, status int, page htmlPage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'")
+	csp := "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+	if page.PasskeyCeremony {
+		csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
+	}
+	w.Header().Set("Content-Security-Policy", csp)
 	w.WriteHeader(status)
 	if err := pageTemplate.Execute(w, page); err != nil {
 		log.Printf("render HTML page: %v", err)
@@ -258,6 +295,7 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 	data := htmlPage{
 		Title: page.Title, Description: page.Description, Username: account.Username,
 		Sections: page.Sections, CanVerify: s.opts.Recovery != nil, CanTOTP: s.totp() != nil,
+		CanPasskey: s.webauthn() != nil,
 	}
 	if reader, ok := s.actions.(turnsReader); ok {
 		ipSlot, status := s.reserveActionIP(r)

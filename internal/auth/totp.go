@@ -367,13 +367,18 @@ func (s *Service) createLoginChallengeLocked(ctx context.Context, accountID int6
 	if err := s.ensurePasswordAndRehash(ctx, tx, accountID, currentHash, verifiedHash, password); err != nil {
 		return "", rollbackAuth(tx, err)
 	}
-	var enabled bool
+	var hasTOTP, hasPasskey bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS(
-		SELECT 1 FROM account_totp WHERE account_id = $1)`, accountID).Scan(&enabled)
+		SELECT 1 FROM account_totp WHERE account_id = $1)`, accountID).Scan(&hasTOTP)
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("check totp for challenge: %w", err))
 	}
-	if !enabled {
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM webauthn_credentials WHERE account_id = $1)`, accountID).Scan(&hasPasskey)
+	if err != nil {
+		return "", rollbackAuth(tx, fmt.Errorf("check passkey for challenge: %w", err))
+	}
+	if !hasTOTP && !hasPasskey {
 		return "", rollbackAuth(tx, ErrTOTPNotEnabled)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE account_id = $1`, accountID); err != nil {
