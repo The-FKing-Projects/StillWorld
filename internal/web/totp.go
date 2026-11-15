@@ -93,8 +93,12 @@ func (s *Server) finishLoginSecondFactor(w http.ResponseWriter, r *http.Request,
 	failed := errors.Is(err, auth.ErrTOTPInvalid) || errors.Is(err, auth.ErrTOTPChallenge) ||
 		errors.Is(err, auth.ErrTOTPNotEnabled) || errors.Is(err, auth.ErrTOTPUnavailable)
 	if ipErr := s.loginIP.finish(ipSlot, failed, err == nil); ipErr != nil {
-		rateLimitUnavailable(w, ipErr)
-		return
+		// Session may already exist; do not convert a successful login into 503.
+		log.Print("totp login rate limit finalization failed")
+		if err != nil {
+			rateLimitUnavailable(w, ipErr)
+			return
+		}
 	}
 	switch {
 	case err == nil:
@@ -218,8 +222,13 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	codes, err := svc.ConfirmTOTPEnrolment(r.Context(), acct.ID, r.PostFormValue("code"))
 	failed := errors.Is(err, auth.ErrTOTPInvalid)
 	if ipErr := s.loginIP.finish(ipSlot, failed, err == nil); ipErr != nil {
-		rateLimitUnavailable(w, ipErr)
-		return
+		// Enrolment already committed; never discard newly issued recovery codes
+		// or convert a successful confirm into 503 because limiter release failed.
+		log.Print("totp confirm rate limit finalization failed")
+		if err != nil {
+			rateLimitUnavailable(w, ipErr)
+			return
+		}
 	}
 	switch {
 	case err == nil:

@@ -244,15 +244,21 @@ func (s *Service) completeChallenge(ctx context.Context, challengeToken string, 
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("lock account for totp login: %w", err))
 	}
+	// Refresh after the account lock so expiry is not evaluated with a stale
+	// clock from before waiting on a long-held account row.
+	now = s.Now()
 	var lockedAccountID int64
 	err = tx.QueryRowContext(ctx, `SELECT account_id FROM login_challenges
 		WHERE token_hash = $1 AND expires_at > $2 FOR UPDATE`,
 		challengeHash, now).Scan(&lockedAccountID)
-	if errors.Is(err, sql.ErrNoRows) || lockedAccountID != accountID {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", rollbackAuth(tx, ErrTOTPChallenge)
 	}
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("lock login challenge: %w", err))
+	}
+	if lockedAccountID != accountID {
+		return "", rollbackAuth(tx, ErrTOTPChallenge)
 	}
 	if err := verify(tx, accountID); err != nil {
 		return "", rollbackAuth(tx, err)
