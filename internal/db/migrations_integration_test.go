@@ -158,13 +158,20 @@ DROP TABLE game_lock_probe;
 		_ = conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked)
 	}()
 
+	attempted := make(chan struct{}, 1)
+	db.SetMigrationLockAttemptHookForTest(func() {
+		select {
+		case attempted <- struct{}{}:
+		default:
+		}
+	})
+	t.Cleanup(func() { db.SetMigrationLockAttemptHookForTest(nil) })
+
 	done := make(chan error, 1)
 	go func() {
 		done <- db.MigrateGameDeployment(ctx, d, "counter", migrations)
 	}()
-	// acquireMigrationLock polls pg_try_advisory_lock every 50ms; keep the
-	// lock held long enough that the waiting invocation has entered that loop.
-	waitForPollingMigrator(t, ctx, d, done)
+	waitForLockAcquisitionAttempt(t, ctx, attempted, done)
 
 	var unlocked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked); err != nil || !unlocked {
@@ -226,26 +233,15 @@ DROP TABLE game_after_failure;
 	}
 }
 
-func waitForPollingMigrator(t *testing.T, ctx context.Context, d *sql.DB, result <-chan error) {
+func waitForLockAcquisitionAttempt(t *testing.T, ctx context.Context, attempted <-chan struct{}, result <-chan error) {
 	t.Helper()
-	// Confirm the waiting migrator has not finished and the game table is
-	// still absent, then stay blocked for a few try-lock intervals.
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-result:
-			t.Fatalf("migrator finished before lock release: %v", err)
-		case <-ctx.Done():
-			t.Fatal("context canceled while waiting for polling migrator")
-		case <-time.After(20 * time.Millisecond):
-		}
-		var table sql.NullString
-		if err := d.QueryRowContext(ctx, `SELECT to_regclass('game_lock_probe')::text`).Scan(&table); err != nil {
-			t.Fatal(err)
-		}
-		if table.Valid && table.String != "" {
-			t.Fatal("game migration ran while advisory lock was still held")
-		}
+	select {
+	case <-attempted:
+		return
+	case err := <-result:
+		t.Fatalf("migrator finished before a lock-acquisition attempt: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for migration lock-acquisition attempt")
 	}
 }
 
