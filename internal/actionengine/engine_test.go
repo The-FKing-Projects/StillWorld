@@ -199,6 +199,234 @@ func TestConcurrentDuplicateSubmissionsExecuteOnce(t *testing.T) {
 	}
 }
 
+func TestRequestConflictRejectsChangedInput(t *testing.T) {
+	d, playerID := setupAccount(t, 5)
+	createCounterTable(t, d)
+	var applyCalls atomic.Int32
+	handler := incrementAction(&applyCalls, 0, 0)
+	engine := newTestEngine(t, d, handler)
+	requestID := issue(t, engine, playerID, "counter.increment")
+	firstInput := []byte(`{"amount":1}`)
+	if _, err := engine.Execute(context.Background(), playerID, "counter.increment", requestID.Token, firstInput); err != nil {
+		t.Fatal(err)
+	}
+	_, err := engine.Execute(context.Background(), playerID, "counter.increment", requestID.Token, []byte(`{"amount":2}`))
+	if !errors.Is(err, ErrRequestConflict) {
+		t.Fatalf("changed input error = %v, want %v", err, ErrRequestConflict)
+	}
+	if applyCalls.Load() != 1 {
+		t.Fatalf("Apply called %d times, want 1", applyCalls.Load())
+	}
+	if got := counterValue(t, d, playerID); got != 1 {
+		t.Fatalf("counter = %d, want 1", got)
+	}
+	if got := turnsBalance(t, d, playerID); got != 4 {
+		t.Fatalf("Turns balance = %d, want 4", got)
+	}
+}
+
+func TestExpiredRequestIDAfterWaitingForAccountLock(t *testing.T) {
+	d, playerID := setupAccount(t, 5)
+	createCounterTable(t, d)
+	var applyCalls atomic.Int32
+	keys := testKeys(t)
+	engine := newTestEngineWith(t, d, keys, []actionregistry.Registration{
+		{Name: "counter.increment", Handler: incrementAction(&applyCalls, 0, 0)},
+	})
+
+	var now time.Time
+	if err := d.QueryRowContext(context.Background(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	// Issue a token that expires in a few seconds so the first Verify succeeds
+	// while the waiter is blocked, then the post-lock recheck rejects.
+	token, claims, err := keys.Issue(actiontoken.Scope{
+		PlayerID:   playerID,
+		GameID:     "counter_game",
+		ActionName: "counter.increment",
+	}, now.UTC().Add(-24*time.Hour+3*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lockTx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockTx.Rollback()
+	var holderPID, lockedID int64
+	if err := lockTx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockTx.QueryRowContext(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, playerID).Scan(&lockedID); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		outcome Outcome
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		outcome, err := engine.Execute(ctx, playerID, "counter.increment", token, []byte(`{"amount":1}`))
+		done <- result{outcome: outcome, err: err}
+	}()
+	waitForBlockedBackend(t, ctx, d, holderPID, done)
+
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		var expired bool
+		if err := d.QueryRowContext(ctx, `SELECT clock_timestamp() >= $1`, claims.ExpiresAt).Scan(&expired); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := lockTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if !errors.Is(got.err, ErrExpiredRequestID) {
+		t.Fatalf("Execute after lock wait = %+v %v, want %v", got.outcome, got.err, ErrExpiredRequestID)
+	}
+	if applyCalls.Load() != 0 {
+		t.Fatalf("Apply called %d times, want 0", applyCalls.Load())
+	}
+	if got := turnsBalance(t, d, playerID); got != 5 {
+		t.Fatalf("Turns balance = %d, want 5", got)
+	}
+}
+
+func TestConcurrentDistinctRequestsSpendLastTurnOnce(t *testing.T) {
+	d, playerID := setupAccount(t, 1)
+	createCounterTable(t, d)
+	var applyCalls atomic.Int32
+	engine := newTestEngine(t, d, incrementAction(&applyCalls, 0, 0))
+	first := issue(t, engine, playerID, "counter.increment")
+	second := issue(t, engine, playerID, "counter.increment")
+	input := []byte(`{"amount":1}`)
+
+	results := make([]Outcome, 2)
+	errs := make([]error, 2)
+	tokens := []string{first.Token, second.Token}
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = engine.Execute(context.Background(), playerID, "counter.increment", tokens[i], input)
+		}(i)
+	}
+	wg.Wait()
+
+	var successes, rejections int
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("Execute %d: %v", i, err)
+		}
+		switch results[i].Status {
+		case "success":
+			successes++
+		case "rejected":
+			rejections++
+			if results[i].Rejection == nil || results[i].Rejection.Code != "stillworld.insufficient_turns" {
+				t.Fatalf("Execute %d rejection = %+v", i, results[i])
+			}
+		default:
+			t.Fatalf("Execute %d outcome = %+v", i, results[i])
+		}
+	}
+	if successes != 1 || rejections != 1 {
+		t.Fatalf("successes=%d rejections=%d, want 1 each", successes, rejections)
+	}
+	if applyCalls.Load() != 1 {
+		t.Fatalf("Apply called %d times, want 1", applyCalls.Load())
+	}
+	if got := counterValue(t, d, playerID); got != 1 {
+		t.Fatalf("counter = %d, want 1", got)
+	}
+	if got := turnsBalance(t, d, playerID); got != 0 {
+		t.Fatalf("Turns balance = %d, want 0", got)
+	}
+}
+
+func TestCleanupSkipsAccountHeldByInFlightAction(t *testing.T) {
+	d, playerID := setupAccount(t, 5)
+	createCounterTable(t, d)
+	var applyCalls atomic.Int32
+	engine := newTestEngine(t, d, incrementAction(&applyCalls, 0, 0))
+	prior := issue(t, engine, playerID, "counter.increment")
+	if _, err := engine.Execute(context.Background(), playerID, "counter.increment", prior.Token, []byte(`{"amount":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ExecContext(context.Background(),
+		`UPDATE stillworld_action_outcomes
+		    SET expires_at = clock_timestamp() - interval '1 second'
+		  WHERE account_id = $1`, playerID); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	lockTx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lockTx.Rollback()
+	var holderPID, lockedID int64
+	if err := lockTx.QueryRowContext(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+	if err := lockTx.QueryRowContext(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, playerID).Scan(&lockedID); err != nil {
+		t.Fatal(err)
+	}
+
+	next := issue(t, engine, playerID, "counter.increment")
+	type result struct {
+		outcome Outcome
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		outcome, err := engine.Execute(ctx, playerID, "counter.increment", next.Token, []byte(`{"amount":1}`))
+		done <- result{outcome: outcome, err: err}
+	}()
+	waitForBlockedBackend(t, ctx, d, holderPID, done)
+
+	deleted, err := engine.CleanupExpired(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Fatalf("cleanup deleted %d outcomes while action held the account lock, want 0", deleted)
+	}
+	if got := actionOutcomeCount(t, d, playerID); got != 1 {
+		t.Fatalf("expired outcomes during in-flight action = %d, want 1", got)
+	}
+
+	if err := lockTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil || got.outcome.Status != "success" {
+		t.Fatalf("in-flight Execute = %+v %v", got.outcome, got.err)
+	}
+	if got := actionOutcomeCount(t, d, playerID); got != 2 {
+		t.Fatalf("outcomes after in-flight success = %d, want 2 (expired prior + new)", got)
+	}
+	deleted, err = engine.CleanupExpired(ctx, 10)
+	if err != nil || deleted != 1 {
+		t.Fatalf("cleanup after release deleted %d, err %v; want 1", deleted, err)
+	}
+	if got := actionOutcomeCount(t, d, playerID); got != 1 {
+		t.Fatalf("final outcomes = %d, want 1 (unexpired new result)", got)
+	}
+}
+
 func TestCleanupExpiredOutcomesIsBoundedAndSkipsLockedAccounts(t *testing.T) {
 	d, firstPlayer := setupAccount(t, 5)
 	var secondPlayer int64
@@ -298,16 +526,48 @@ func createCounterTable(t *testing.T, d *sql.DB) {
 
 func newTestEngine(t *testing.T, d *sql.DB, handler action.Action) *Engine {
 	t.Helper()
+	return newTestEngineWith(t, d, testKeys(t), []actionregistry.Registration{
+		{Name: "counter.increment", Handler: handler},
+	})
+}
+
+func testKeys(t *testing.T) *actiontoken.KeyRing {
+	t.Helper()
 	keys, err := actiontoken.NewKeyRing("test", map[string][]byte{"test": bytes.Repeat([]byte{0x5a}, 32)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	engine, err := New(d, "counter_game", turns.Policy{Cap: 10, Interval: 24 * time.Hour}, keys,
-		[]actionregistry.Registration{{Name: "counter.increment", Handler: handler}})
+	return keys
+}
+
+func newTestEngineWith(t *testing.T, d *sql.DB, keys *actiontoken.KeyRing, registrations []actionregistry.Registration) *Engine {
+	t.Helper()
+	engine, err := New(d, "counter_game", turns.Policy{Cap: 10, Interval: 24 * time.Hour}, keys, registrations)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return engine
+}
+
+func waitForBlockedBackend[T any](t *testing.T, ctx context.Context, d *sql.DB, holderPID int64, result <-chan T) {
+	t.Helper()
+	for {
+		var blocked bool
+		if err := d.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)))`, holderPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			return
+		}
+		select {
+		case got := <-result:
+			t.Fatalf("operation completed before account lock was released: %+v", got)
+		case <-ctx.Done():
+			t.Fatal("operation did not wait for account lock")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func issue(t *testing.T, engine *Engine, playerID int64, actionName string) RequestID {
