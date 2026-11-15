@@ -49,6 +49,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	totpKeys, err := stillworld.TOTPKeysFromEnv()
+	if err != nil {
+		return err
+	}
 	sharedRateLimits := false
 	if value := os.Getenv("STILLWORLD_SHARED_RATE_LIMITS"); value != "" {
 		sharedRateLimits, err = strconv.ParseBool(value)
@@ -82,6 +86,7 @@ func run() error {
 		Presentation:          counterPresentation{database: database},
 		Recovery:              recoveryConfig,
 		SharedRateLimits:      sharedRateLimits,
+		TOTP:                  totpKeys,
 	})
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)

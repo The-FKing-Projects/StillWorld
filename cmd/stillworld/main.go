@@ -97,6 +97,14 @@ func serve(stderr io.Writer) int {
 		fmt.Fprintln(stderr, "stillworld:", err)
 		return 1
 	}
+	totpKeys, err := config.TotpKeysFromEnv()
+	if err != nil {
+		fmt.Fprintln(stderr, "stillworld:", err)
+		return 1
+	}
+	if totpKeys != nil {
+		svc.SetTOTPKeys(totpKeys)
+	}
 	go cleanupAuth(ctx, svc, stderr)
 
 	var limitsDB *sql.DB
@@ -144,6 +152,9 @@ func cleanupAuth(ctx context.Context, svc *auth.Service, stderr io.Writer) {
 			}
 			if _, err := svc.DeleteExpiredPendingSignups(ctx, 100); err != nil {
 				fmt.Fprintln(stderr, "stillworld: pending signup cleanup:", err)
+			}
+			if _, err := svc.DeleteExpiredTOTPState(ctx); err != nil {
+				fmt.Fprintln(stderr, "stillworld: totp cleanup:", err)
 			}
 		}
 	}
