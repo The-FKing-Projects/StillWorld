@@ -139,11 +139,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /login", s.handleLogin)
 	mux.HandleFunc("POST /login/totp", s.handleLoginTOTP)
 	mux.HandleFunc("POST /login/recovery-code", s.handleLoginRecoveryCode)
+	mux.HandleFunc("POST /login/passkey/begin", s.handleLoginPasskeyBegin)
+	mux.HandleFunc("POST /login/passkey", s.handleLoginPasskey)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /me", s.handleMe)
 	mux.HandleFunc("POST /totp/begin", s.handleTOTPBegin)
 	mux.HandleFunc("POST /totp/confirm", s.handleTOTPConfirm)
 	mux.HandleFunc("POST /totp/disable", s.handleTOTPDisable)
+	mux.HandleFunc("POST /passkeys/begin", s.handlePasskeyRegisterBegin)
+	mux.HandleFunc("POST /passkeys/finish", s.handlePasskeyRegisterFinish)
+	mux.HandleFunc("POST /passkeys/delete", s.handlePasskeyDelete)
 	if s.opts.Recovery != nil {
 		mux.HandleFunc("POST /forgot-password", s.handleForgotPassword)
 		mux.HandleFunc("POST /reset-password", s.handleResetPassword)
@@ -165,6 +170,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /login/totp", s.handleHTMLLoginTOTP)
 		mux.HandleFunc("GET /signup", s.handleHTMLSignup)
 		mux.HandleFunc("GET /totp", s.handleHTMLTOTP)
+		mux.HandleFunc("GET /passkeys", s.handleHTMLPasskeys)
 		mux.HandleFunc("POST /actions/{actionName}", s.handleHTMLAction)
 		mux.HandleFunc("GET /actions/results/{nonce}", s.handleHTMLResult)
 	}
@@ -195,6 +201,9 @@ func (s *Server) protect(next http.Handler) http.Handler {
 			if strings.HasPrefix(r.URL.Path, "/api/actions/") ||
 				strings.HasPrefix(r.URL.Path, "/api/action-requests/") {
 				bodyLimit = maxActionBodyBytes
+			}
+			if r.URL.Path == "/passkeys/finish" || r.URL.Path == "/login/passkey" {
+				bodyLimit = maxWebAuthnBodyBytes
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 		}
@@ -322,11 +331,13 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprintf(w, "totp required\n%s\n", challenge.Token)
+		fmt.Fprintf(w, "second factor required\n%s\n", challenge.Token)
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		s.authError(w, r, "login", "invalid username or password", http.StatusUnauthorized)
 	case errors.Is(err, auth.ErrTOTPUnavailable):
 		http.Error(w, "totp unavailable", http.StatusServiceUnavailable)
+	case errors.Is(err, auth.ErrWebAuthnUnavailable):
+		http.Error(w, "webauthn unavailable", http.StatusServiceUnavailable)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}

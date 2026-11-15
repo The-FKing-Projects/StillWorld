@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -57,6 +58,7 @@ type Service struct {
 	initialTurns int64
 	dummyHash    string
 	totp         *TOTPKeyRing
+	wa           *webauthn.WebAuthn
 }
 
 // NewService returns a Service using DefaultParams and the system clock.
@@ -160,18 +162,23 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", ErrInvalidCredentials
 	}
 
-	enabled, err := s.accountHasTOTP(ctx, id)
+	hasTOTP, hasPasskey, err := s.accountHasSecondFactor(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	if enabled {
-		if s.totp == nil {
-			return "", ErrTOTPUnavailable
+	if hasTOTP || hasPasskey {
+		canTOTP := hasTOTP && s.totp != nil
+		canPasskey := hasPasskey && s.wa != nil
+		if !canTOTP && !canPasskey {
+			if hasTOTP {
+				return "", ErrTOTPUnavailable
+			}
+			return "", ErrWebAuthnUnavailable
 		}
 		// Password accepted: issue a short-lived challenge instead of a session.
 		// Rehash runs under the account lock while creating the challenge (plaintext
-		// is available here, not at TOTP completion). Failed second factors do not
-		// create a session.
+		// is available here, not at second-factor completion). Failed second factors
+		// do not create a session. Either TOTP or a passkey may finish the challenge.
 		challenge, err := s.createLoginChallengeLocked(ctx, id, hash, password)
 		if err != nil {
 			return "", err

@@ -36,8 +36,10 @@ the PostgreSQL superuser for the application.
 StillWorld generates random session tokens and stores only their hashes in
 PostgreSQL. Optional TOTP (issue #15) needs a dedicated AEAD key in the service
 environment when you enable authenticator enrolment; do not derive that key
-from the database password. Provision and protect the database credential, any
-TOTP key material, and the database and its backups.
+from the database password. Optional passkeys (issue #16) need Relying Party ID
+and origin settings that match the public hostname served by Nginx. Provision
+and protect the database credential, any TOTP key material, and the database
+and its backups.
 
 ## Configure and install
 
@@ -94,6 +96,34 @@ TOTP key like the database credential and keep it out of database dumps.
 Authenticator recovery codes are stored hashed; the TOTP seed itself is stored
 encrypted. Enrolment confirmation codes share the login IP rate limit. This is
 a private/staging control, not a public-deployment clearance.
+
+### Optional passkeys (WebAuthn)
+
+Per-account passkeys are an optional second factor after the password (decision
+A on issue #16). Passwordless login is out of scope. To allow enrolment and
+assertion, set the Relying Party to the hostname clients use through Nginx:
+
+```ini
+STILLWORLD_WEBAUTHN_RP_ID=staging.example.com
+STILLWORLD_WEBAUTHN_RP_ORIGINS=https://staging.example.com
+STILLWORLD_WEBAUTHN_RP_DISPLAY_NAME=StillWorld
+```
+
+`STILLWORLD_WEBAUTHN_RP_DISPLAY_NAME` defaults to `StillWorld` when omitted.
+`STILLWORLD_WEBAUTHN_RP_ORIGINS` is a comma-separated list of fully qualified
+origins (scheme + host, and port when non-default). The RP ID must be an
+effective domain of those origins. Local development typically uses
+`STILLWORLD_WEBAUTHN_RP_ID=localhost` with
+`STILLWORLD_WEBAUTHN_RP_ORIGINS=http://localhost:8080` and insecure cookies.
+Without these settings, accounts without passkeys continue to work; accounts
+that already have passkeys (and no usable TOTP path) cannot complete login
+until WebAuthn is configured. Stored credentials are public verifier material
+(credential ID, public key, sign count, and related fields), not encrypted
+secrets. Ceremony JavaScript runs only on enrol/assert pages; game actions
+remain usable without JavaScript. Assertion and enrolment attempts share the
+login IP rate limit. When both TOTP and a passkey are enrolled, either second
+factor may finish the login challenge. This is a private/staging control, not
+a public-deployment clearance.
 
 Build the binary from a reviewed source revision on a trusted build host, then
 transfer it to the server through a trusted channel:

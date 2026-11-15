@@ -13,8 +13,10 @@ import (
 var (
 	// ErrTOTPUnavailable means TOTP keys are not configured.
 	ErrTOTPUnavailable = errors.New("auth: totp unavailable")
-	// ErrTOTPRequired means password was accepted and a second factor is needed.
-	ErrTOTPRequired = errors.New("auth: totp required")
+	// ErrSecondFactorRequired means password was accepted and a second factor is needed.
+	ErrSecondFactorRequired = errors.New("auth: second factor required")
+	// ErrTOTPRequired is retained as an alias of ErrSecondFactorRequired.
+	ErrTOTPRequired = ErrSecondFactorRequired
 	// ErrTOTPInvalid means the code or recovery code was rejected.
 	ErrTOTPInvalid = errors.New("auth: invalid totp code")
 	// ErrTOTPNotEnabled means the account has no confirmed TOTP.
@@ -25,14 +27,15 @@ var (
 	ErrTOTPChallenge = errors.New("auth: invalid or expired login challenge")
 )
 
-// ChallengeError is returned from Login when a TOTP step is required. Unwrap
-// to ErrTOTPRequired; Token is the opaque challenge for CompleteLoginTOTP.
+// ChallengeError is returned from Login when a second factor is required. Unwrap
+// to ErrSecondFactorRequired; Token is the opaque challenge for CompleteLoginTOTP
+// / CompleteLoginPasskey.
 type ChallengeError struct {
 	Token string
 }
 
-func (e *ChallengeError) Error() string { return ErrTOTPRequired.Error() }
-func (e *ChallengeError) Unwrap() error { return ErrTOTPRequired }
+func (e *ChallengeError) Error() string { return ErrSecondFactorRequired.Error() }
+func (e *ChallengeError) Unwrap() error { return ErrSecondFactorRequired }
 
 // TOTPKeyRing holds AEAD keys for encrypting TOTP secrets at rest.
 type TOTPKeyRing struct {

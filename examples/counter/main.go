@@ -53,6 +53,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	webAuthn, err := stillworld.WebAuthnFromEnv()
+	if err != nil {
+		return err
+	}
 	sharedRateLimits := false
 	if value := os.Getenv("STILLWORLD_SHARED_RATE_LIMITS"); value != "" {
 		sharedRateLimits, err = strconv.ParseBool(value)
@@ -87,6 +91,7 @@ func run() error {
 		Recovery:              recoveryConfig,
 		SharedRateLimits:      sharedRateLimits,
 		TOTP:                  totpKeys,
+		WebAuthn:              webAuthn,
 	})
 	if err != nil {
 		return fmt.Errorf("configure StillWorld: %w", err)

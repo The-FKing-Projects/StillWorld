@@ -136,10 +136,26 @@ func (s *Server) handleHTMLLoginTOTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login", http.StatusSeeOther)
 		return
 	}
+	info := auth.SecondFactorInfo{TOTP: s.totp() != nil}
+	if svc := s.webauthn(); svc != nil {
+		if c, err := r.Cookie(s.challengeCookieName()); err == nil {
+			if factors, ferr := svc.LoginChallengeFactors(r.Context(), c.Value); ferr == nil {
+				info = factors
+			}
+		}
+	}
+	desc := "Complete sign-in with a second factor."
+	switch {
+	case info.TOTP && info.Passkey:
+		desc = "Enter an authenticator code or recovery code, or use a registered passkey."
+	case info.Passkey && !info.TOTP:
+		desc = "Use a registered passkey to finish sign-in."
+	case info.TOTP:
+		desc = "Enter the code from your authenticator app, or a one-time recovery code."
+	}
 	renderHTML(w, http.StatusOK, htmlPage{
-		Title:       "Two-factor authentication",
-		Description: "Enter the code from your authenticator app, or a one-time recovery code.",
-		AuthKind:    "login/totp",
+		Title: "Two-factor authentication", Description: desc,
+		AuthKind: "login/totp", CanPasskey: info.Passkey, CanTOTP: info.TOTP,
 	})
 }
 
