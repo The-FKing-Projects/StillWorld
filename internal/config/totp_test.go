@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
 	"testing"
 )
@@ -37,5 +38,23 @@ func TestTotpKeysFromLookup(t *testing.T) {
 	}))
 	if err != nil || ring == nil {
 		t.Fatalf("rotation keys: %#v %v", ring, err)
+	}
+}
+
+func TestParseTOTPKeyURLSafePadded(t *testing.T) {
+	key := bytes.Repeat([]byte{0x7e}, 32)
+	padded := base64.URLEncoding.EncodeToString(key)
+	if !bytes.ContainsRune([]byte(padded), '=') {
+		t.Fatalf("expected padding in %q", padded)
+	}
+	raw, err := parseTOTPKey(padded)
+	if err != nil || !bytes.Equal(raw, key) {
+		t.Fatalf("padded URL-safe: %v %x", err, raw)
+	}
+	ring, err := totpKeysFromLookup(lookupFrom(map[string]string{
+		"STILLWORLD_TOTP_KEY": padded,
+	}))
+	if err != nil || ring == nil {
+		t.Fatalf("env padded URL-safe: %#v %v", ring, err)
 	}
 }

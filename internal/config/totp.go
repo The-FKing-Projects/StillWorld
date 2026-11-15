@@ -87,5 +87,8 @@ func parseTOTPKey(material string) ([]byte, error) {
 	if raw, err := base64.RawURLEncoding.DecodeString(material); err == nil && len(raw) == 32 {
 		return raw, nil
 	}
+	if raw, err := base64.URLEncoding.DecodeString(material); err == nil && len(raw) == 32 {
+		return raw, nil
+	}
 	return nil, fmt.Errorf("must be 32 bytes as 64 hex characters or base64")
 }

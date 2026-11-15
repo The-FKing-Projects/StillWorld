@@ -206,7 +206,21 @@ func (s *Server) handleTOTPConfirm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	ipSlot, err := s.loginIP.reserve(r.Context(), s.clientIP(r))
+	if err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
+	if ipSlot == nil {
+		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+		return
+	}
 	codes, err := svc.ConfirmTOTPEnrolment(r.Context(), acct.ID, r.PostFormValue("code"))
+	failed := errors.Is(err, auth.ErrTOTPInvalid)
+	if ipErr := s.loginIP.finish(ipSlot, failed, err == nil); ipErr != nil {
+		rateLimitUnavailable(w, ipErr)
+		return
+	}
 	switch {
 	case err == nil:
 		if s.htmlForm(r) {

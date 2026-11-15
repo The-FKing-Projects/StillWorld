@@ -169,8 +169,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 			return "", ErrTOTPUnavailable
 		}
 		// Password accepted: issue a short-lived challenge instead of a session.
-		// Rehash waits until a full session is created (no TOTP) so failed second
-		// factors cannot rewrite the password hash.
+		// Rehash runs under the account lock while creating the challenge (plaintext
+		// is available here, not at TOTP completion). Failed second factors do not
+		// create a session.
 		challenge, err := s.createLoginChallengeLocked(ctx, id, hash, password)
 		if err != nil {
 			return "", err
@@ -182,47 +183,80 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 }
 
 func (s *Service) createSession(ctx context.Context, id int64, verifiedHash, password string) (string, error) {
-	token, err := newToken()
-	if err != nil {
-		return "", err
-	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin session transaction: %w", err)
 	}
-	var currentHash string
 	// FOR UPDATE serializes login with password resets and concurrent rehashes.
-	err = tx.QueryRowContext(ctx,
+	currentHash, err := s.lockAccountPassword(ctx, tx, id)
+	if err != nil {
+		return "", rollbackAuth(tx, err)
+	}
+	if err := s.ensurePasswordAndRehash(ctx, tx, id, currentHash, verifiedHash, password); err != nil {
+		return "", rollbackAuth(tx, err)
+	}
+	token, err := s.insertSessionTx(ctx, tx, id)
+	if err != nil {
+		return "", rollbackAuth(tx, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit session: %w", err)
+	}
+	return token, nil
+}
+
+// lockAccountPassword locks the account row. Callers must hold tx.
+func (s *Service) lockAccountPassword(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
+	var currentHash string
+	err := tx.QueryRowContext(ctx,
 		`SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`, id).Scan(&currentHash)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", rollbackAuth(tx, ErrInvalidCredentials)
+		return "", ErrInvalidCredentials
 	}
 	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("lock account for login: %w", err))
+		return "", fmt.Errorf("lock account for login: %w", err)
 	}
+	return currentHash, nil
+}
+
+// ensurePasswordAndRehash re-verifies when the stored hash moved, then upgrades
+// weaker Argon2 parameters. Callers must hold a lock on the account row.
+func (s *Service) ensurePasswordAndRehash(ctx context.Context, tx *sql.Tx, id int64, currentHash, verifiedHash, password string) error {
 	if currentHash != verifiedHash {
-		// Another login may have rehashed, or a reset may have replaced the
-		// password. Re-verify; reject only when the password no longer matches.
 		ok, verr := VerifyPassword(password, currentHash)
 		if verr != nil {
-			return "", rollbackAuth(tx, fmt.Errorf("verify current password hash: %w", verr))
+			return fmt.Errorf("verify current password hash: %w", verr)
 		}
 		if !ok {
-			return "", rollbackAuth(tx, ErrInvalidCredentials)
+			return ErrInvalidCredentials
 		}
 	}
-	if NeedsRehash(currentHash, s.params) {
-		stored, _, _, derr := decodeHash(currentHash)
-		if derr != nil {
-			return "", rollbackAuth(tx, fmt.Errorf("decode password hash: %w", derr))
-		}
-		newHash, herr := HashPassword(password, UpgradeParams(stored, s.params))
-		if herr != nil {
-			return "", rollbackAuth(tx, fmt.Errorf("rehash password: %w", herr))
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, newHash, id); err != nil {
-			return "", rollbackAuth(tx, fmt.Errorf("store rehashed password: %w", err))
-		}
+	return s.rehashPasswordIfNeeded(ctx, tx, id, currentHash, password)
+}
+
+func (s *Service) rehashPasswordIfNeeded(ctx context.Context, tx *sql.Tx, id int64, currentHash, password string) error {
+	if !NeedsRehash(currentHash, s.params) {
+		return nil
+	}
+	stored, _, _, derr := decodeHash(currentHash)
+	if derr != nil {
+		return fmt.Errorf("decode password hash: %w", derr)
+	}
+	newHash, herr := HashPassword(password, UpgradeParams(stored, s.params))
+	if herr != nil {
+		return fmt.Errorf("rehash password: %w", herr)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, newHash, id); err != nil {
+		return fmt.Errorf("store rehashed password: %w", err)
+	}
+	return nil
+}
+
+// insertSessionTx creates a session for a locked, authenticated account.
+func (s *Service) insertSessionTx(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
+	token, err := newToken()
+	if err != nil {
+		return "", err
 	}
 	now := s.Now()
 	_, err = tx.ExecContext(ctx,
@@ -230,10 +264,7 @@ func (s *Service) createSession(ctx context.Context, id int64, verifiedHash, pas
 		 VALUES ($1, $2, $3, $3, $4)`,
 		hashToken(token), id, now, now.Add(IdleTimeout))
 	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("insert session: %w", err))
-	}
-	if err := tx.Commit(); err != nil {
-		return "", fmt.Errorf("commit session: %w", err)
+		return "", fmt.Errorf("insert session: %w", err)
 	}
 	return token, nil
 }
