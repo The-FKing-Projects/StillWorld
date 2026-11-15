@@ -46,8 +46,48 @@ example as the game-owning executable (not `cmd/stillworld`, which is auth and
 operator tooling only). It documents the current operational limits and does
 not change the project's public-deployment readiness status.
 
+## Quick start
+
+Requirements: Go version from [`go.mod`](go.mod), and PostgreSQL for integration
+tests and local serve.
+
+```sh
+# Unit and integration tests (CI uses a disposable Postgres service)
+export STILLWORLD_DATABASE_URL='postgres://stillworld:stillworld@localhost:5432/stillworld_test?sslmode=disable'
+go test ./...
+
+# Relay example (game-owned binary) for local smoke — insecure cookies for HTTP
+cd examples/relay
+# See examples/relay/README.md for migrate/serve and env vars
+```
+
+`cmd/stillworld` is auth and operator tooling only; it does not register a game.
+Downstream games own the deployable binary (Relay for staging docs).
+
+## Docs
+
+| Doc | Role |
+| --- | --- |
+| [PRODUCT.md](PRODUCT.md) | Product purpose and constraints |
+| [DESIGN.md](DESIGN.md) | Design entry points |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Clean-room rule and DCO |
+| [docs/deployment.md](docs/deployment.md) | Private/staging single-VPS (Relay) |
+| [docs/design/](docs/design/) | Core model, Turns, neutral framework |
+
+## Roadmap
+
+Living index: [issue #24](https://github.com/The-FKing-Projects/StillWorld/issues/24).  
+Phase milestones: [milestones](https://github.com/The-FKing-Projects/StillWorld/milestones).
+
+Open work is tracked as discrete issues under **Staging readiness**. StillWorld
+is **not production-ready**.
+
 ## Clean-room development
 
 StillWorld is developed independently. Other games may inform broad
 genre-level ideas only; do not derive code, schemas, templates, prose, assets,
 or implementation details from material you are not licensed to use.
+
+## License
+
+[MIT](LICENSE)
