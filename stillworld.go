@@ -15,6 +15,7 @@ import (
 	"github.com/The-FKing-Projects/StillWorld/internal/actionregistry"
 	"github.com/The-FKing-Projects/StillWorld/internal/actiontoken"
 	"github.com/The-FKing-Projects/StillWorld/internal/auth"
+	"github.com/The-FKing-Projects/StillWorld/internal/config"
 	"github.com/The-FKing-Projects/StillWorld/internal/db"
 	"github.com/The-FKing-Projects/StillWorld/internal/turns"
 	"github.com/The-FKing-Projects/StillWorld/internal/web"
@@ -57,6 +58,18 @@ type Options struct {
 	Recovery *recovery.Config
 	// SharedRateLimits stores authentication and action rate limits in the application database.
 	SharedRateLimits bool
+	// TOTP enables optional TOTP second-factor encryption at rest (issue #15).
+	// Load with TOTPKeysFromEnv.
+	TOTP *TOTPKeyRing
+}
+
+// TOTPKeyRing holds AEAD keys for TOTP secrets at rest.
+type TOTPKeyRing = auth.TOTPKeyRing
+
+// TOTPKeysFromEnv loads the optional TOTP AEAD key ring from STILLWORLD_TOTP_*
+// environment variables. Returns nil when TOTP is not configured.
+func TOTPKeysFromEnv() (*TOTPKeyRing, error) {
+	return config.TotpKeysFromEnv()
 }
 
 // App owns the framework services for one database and one game.
@@ -107,6 +120,9 @@ func New(database *sql.DB, game Game, options Options) (*App, error) {
 	}
 	if options.Now != nil {
 		authService.Now = options.Now
+	}
+	if options.TOTP != nil {
+		authService.SetTOTPKeys(options.TOTP)
 	}
 	httpOptions := web.Options{InsecureCookies: options.InsecureCookies, BehindProxy: options.BehindProxy, Now: options.Now, Presentation: options.Presentation, Recovery: options.Recovery}
 	if options.SharedRateLimits {

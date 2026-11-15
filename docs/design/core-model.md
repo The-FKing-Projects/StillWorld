@@ -47,6 +47,14 @@ Status: draft. These are design decisions, not a finished specification.
   replaces the password and revokes sessions. An administrator's password
   reset or account disable invalidates outstanding tokens; session-only
   revocation does not. Recovery requires a verified address.
+- **Optional TOTP is implemented (issue #15, decision A).** Per-account
+  authenticator enrolment stores the TOTP seed encrypted at rest with a
+  config-provided AES-256-GCM key and `key_id` (see
+  [deployment](../deployment.md#optional-totp-encryption-key)). Enrolment
+  confirms a valid code first. Login becomes two steps when enabled: password,
+  then TOTP or a hashed one-time recovery code. Verification uses a ±1 step
+  window with replay protection. Code attempts share the login IP rate limit.
+  Passkeys (#16) remain after TOTP. Not production-ready.
 
 ## Still open
 
@@ -64,5 +72,4 @@ Status: draft. These are design decisions, not a finished specification.
 - Extend the initial HTML forms and result presentation as games need richer
   inputs and views; the Relay example demonstrates the shared HTML and JSON
   action pipeline.
-- Optional TOTP (#15) and passkeys (#16) are not implemented; passkeys are
-  intended after TOTP.
+- Passkeys (#16) are not implemented; they are intended after TOTP (#15).

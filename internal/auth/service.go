@@ -56,6 +56,7 @@ type Service struct {
 
 	initialTurns int64
 	dummyHash    string
+	totp         *TOTPKeyRing
 }
 
 // NewService returns a Service using DefaultParams and the system clock.
@@ -159,6 +160,24 @@ func (s *Service) Login(ctx context.Context, username, password string) (string,
 		return "", ErrInvalidCredentials
 	}
 
+	enabled, err := s.accountHasTOTP(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if enabled {
+		if s.totp == nil {
+			return "", ErrTOTPUnavailable
+		}
+		// Password accepted: issue a short-lived challenge instead of a session.
+		// Rehash waits until a full session is created (no TOTP) so failed second
+		// factors cannot rewrite the password hash.
+		challenge, err := s.createLoginChallengeLocked(ctx, id, hash, password)
+		if err != nil {
+			return "", err
+		}
+		return "", &ChallengeError{Token: challenge}
+	}
+
 	return s.createSession(ctx, id, hash, password)
 }
 
@@ -253,6 +272,9 @@ func (s *Service) ResetPassword(ctx context.Context, username, password string) 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM email_verification_tokens WHERE account_id = $1`, id); err != nil {
 		return rollbackAuth(tx, fmt.Errorf("revoke email verification tokens: %w", err))
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE account_id = $1`, id); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("revoke login challenges: %w", err))
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: commit password reset: %w", ErrResetOutcomeUnknown, err)
 	}
@@ -320,6 +342,9 @@ func (s *Service) SetAccountEnabled(ctx context.Context, username string, enable
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM email_verification_tokens WHERE account_id = $1`, id); err != nil {
 			return rollbackAuth(tx, fmt.Errorf("revoke email verification tokens: %w", err))
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE account_id = $1`, id); err != nil {
+			return rollbackAuth(tx, fmt.Errorf("revoke login challenges: %w", err))
 		}
 	}
 	if err := tx.Commit(); err != nil {

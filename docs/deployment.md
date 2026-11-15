@@ -33,10 +33,11 @@ different password contains URL-reserved characters, percent-encode it before
 placing it in the URL. Restrict the database role to this database; do not use
 the PostgreSQL superuser for the application.
 
-StillWorld currently needs no application master, signing, or encryption key.
-It generates random session tokens and stores only their hashes in PostgreSQL.
-Provision and protect the database credential, and protect the database and
-its backups; do not invent or reuse an application secret.
+StillWorld generates random session tokens and stores only their hashes in
+PostgreSQL. Optional TOTP (issue #15) needs a dedicated AEAD key in the service
+environment when you enable authenticator enrolment; do not derive that key
+from the database password. Provision and protect the database credential, any
+TOTP key material, and the database and its backups.
 
 ## Configure and install
 
@@ -67,6 +68,29 @@ Nginx configuration below. The application trusts the rightmost
 `X-Forwarded-For` value for rate limiting, so do not enable this setting if
 untrusted clients can connect directly or supply that header. Never set
 `STILLWORLD_INSECURE_COOKIES=true` on a remotely reachable deployment.
+
+### Optional TOTP encryption key
+
+Per-account TOTP is optional. To allow enrolment, add a 32-byte AEAD key to the
+protected environment (generate with `openssl rand -hex 32`):
+
+```ini
+STILLWORLD_TOTP_KEY_ID=v1
+STILLWORLD_TOTP_KEY=HEX_32_BYTE_KEY
+```
+
+`STILLWORLD_TOTP_KEY_ID` defaults to `v1` when omitted. The key may also be
+standard or URL-safe base64 of 32 bytes. Store `key_id` with each encrypted
+seed so you can rotate later. For decryption during rotation, keep prior keys
+in `STILLWORLD_TOTP_KEYS` as `oldid=material,other=material` while
+`STILLWORLD_TOTP_KEY` / `STILLWORLD_TOTP_KEY_ID` name the active encryption key.
+Successful TOTP logins re-encrypt seeds under the active key. Without these
+settings, accounts without TOTP continue to work; accounts that already have
+TOTP cannot complete login until a valid key ring is configured. Protect the
+TOTP key like the database credential and keep it out of database dumps.
+Authenticator recovery codes are stored hashed; the TOTP seed itself is stored
+encrypted. This is a private/staging control, not a public-deployment
+clearance.
 
 Build the binary from a reviewed source revision on a trusted build host, then
 transfer it to the server through a trusted channel:

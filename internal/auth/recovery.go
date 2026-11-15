@@ -120,6 +120,9 @@ func (s *Service) RedeemResetToken(ctx context.Context, token, password string) 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = $1`, consumedID); err != nil {
 		return rollbackAuth(tx, fmt.Errorf("revoke token-reset sessions: %w", err))
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE account_id = $1`, consumedID); err != nil {
+		return rollbackAuth(tx, fmt.Errorf("revoke token-reset login challenges: %w", err))
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: commit token password reset: %w", ErrTokenResetUnknown, err)
 	}

@@ -48,9 +48,11 @@ type htmlPage struct {
 	RetryAction   string
 	RetryFields   url.Values
 	CanVerify     bool
+	CanTOTP       bool
 	VerifyPage    bool
 	Email         string
 	EmailVerified bool
+	TOTPURL       string
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -69,6 +71,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 .logout{display:inline}.logout button{background:transparent;color:#fff;border-color:#fff;margin-left:1rem}
 </style></head><body><header>{{if .NoGame}}StillWorld{{else}}<a href="/">Game home</a>{{end}}{{if .Username}} <span>Signed in as {{.Username}}</span>
 {{if .CanVerify}} <a href="/verify-email">Email verification</a>{{end}}
+{{if .CanTOTP}} <a href="/totp">Authenticator</a>{{end}}
 <form class="logout" method="post" action="/logout"><input type="hidden" name="_html" value="1"><button type="submit">Sign out</button></form>{{end}}</header>
 <main><h1>{{.Title}}</h1>{{if .Description}}<p>{{.Description}}</p>{{end}}{{if .Turns}}<p><strong>Available Turns:</strong> {{.Turns}}</p>{{end}}
 {{if .Message}}<p class="notice" role="status">{{.Message}}</p>{{end}}
@@ -93,12 +96,35 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 {{else if eq .AuthKind "complete-signup"}}
 <label for="code">Signup code</label><input id="code" name="code" autocomplete="off" required maxlength="43">
 <p><button type="submit">Complete signup</button></p>
+{{else if eq .AuthKind "login/totp"}}
+<label for="code">Authentication code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="16">
+<p><button type="submit">Continue</button></p>
+{{else if eq .AuthKind "totp/confirm"}}
+{{if .TOTPURL}}<p class="notice">otpauth URL (for authenticator apps that accept it): <span class="email">{{.TOTPURL}}</span></p>{{end}}
+<label for="code">Confirmation code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required maxlength="6" minlength="6">
+<p><button type="submit">Confirm authenticator</button></p>
+{{else if eq .AuthKind "totp/begin"}}
+<p><button type="submit">Begin authenticator setup</button></p>
+{{else if eq .AuthKind "totp/disable"}}
+<label for="password">Current password</label><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8">
+<p><button type="submit">Disable authenticator</button></p>
 {{else}}
 <label for="username">Username</label><input id="username" name="username" autocomplete="username" required minlength="3" maxlength="32">
 {{if eq .AuthKind "signup"}}{{if .Recovery}}<label for="email">Email (optional)</label><input id="email" name="email" type="email" autocomplete="email"><p>If you include an email, we send a code to finish signup and verify the address. Without an email, the account is created immediately.</p>{{end}}{{end}}
 <label for="password">Password</label><input id="password" name="password" type="password" {{if eq .AuthKind "signup"}}autocomplete="new-password"{{else}}autocomplete="current-password"{{end}} required minlength="8">
 <p><button type="submit">{{if eq .AuthKind "signup"}}Create account{{else}}Sign in{{end}}</button></p>{{end}}</form>
-{{if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>
+{{if eq .AuthKind "login/totp"}}
+<form method="post" action="/login/recovery-code"><input type="hidden" name="_html" value="1">
+<label for="recovery-code">Recovery code</label><input id="recovery-code" name="code" autocomplete="off" required maxlength="16">
+<p><button type="submit">Use recovery code</button></p></form>
+<p><a href="/login">Return to sign in</a></p>
+{{else if eq .AuthKind "totp/begin"}}
+<form method="post" action="/totp/disable"><input type="hidden" name="_html" value="1">
+<label for="password">Current password</label><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8">
+<p><button type="submit">Disable authenticator</button></p></form>
+<p><a href="/">Return to the game</a></p>
+{{else if eq .AuthKind "totp/confirm"}}<p><a href="/totp">Cancel setup</a></p>
+{{else if eq .AuthKind "signup"}}<p>Already have an account? <a href="/login">Sign in</a>.</p>
 {{else if eq .AuthKind "login"}}<p>New here? <a href="/signup">Create an account</a>.</p>{{if .Recovery}}<p><a href="/forgot-password">Forgot your password?</a></p>{{end}}
 {{else if eq .AuthKind "forgot-password"}}<p>Already have a code? <a href="/reset-password">Reset your password</a>.</p>{{if not .NoGame}}<p><a href="/login">Return to sign in</a></p>{{end}}
 {{else if eq .AuthKind "complete-signup"}}<p>Need a new code? <a href="/signup">Start signup again</a>{{if not .NoGame}} or <a href="/login">return to sign in</a>{{end}}.</p>
@@ -229,7 +255,10 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 		renderHTML(w, http.StatusServiceUnavailable, htmlPage{Title: "Temporarily unavailable", Message: "The game actions could not be displayed. Try again later."})
 		return
 	}
-	data := htmlPage{Title: page.Title, Description: page.Description, Username: account.Username, Sections: page.Sections, CanVerify: s.opts.Recovery != nil}
+	data := htmlPage{
+		Title: page.Title, Description: page.Description, Username: account.Username,
+		Sections: page.Sections, CanVerify: s.opts.Recovery != nil, CanTOTP: s.totp() != nil,
+	}
 	if reader, ok := s.actions.(turnsReader); ok {
 		ipSlot, status := s.reserveActionIP(r)
 		if status != 0 {

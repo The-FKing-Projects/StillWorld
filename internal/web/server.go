@@ -137,8 +137,13 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("POST /signup", s.handleSignup)
 	mux.HandleFunc("POST /login", s.handleLogin)
+	mux.HandleFunc("POST /login/totp", s.handleLoginTOTP)
+	mux.HandleFunc("POST /login/recovery-code", s.handleLoginRecoveryCode)
 	mux.HandleFunc("POST /logout", s.handleLogout)
 	mux.HandleFunc("GET /me", s.handleMe)
+	mux.HandleFunc("POST /totp/begin", s.handleTOTPBegin)
+	mux.HandleFunc("POST /totp/confirm", s.handleTOTPConfirm)
+	mux.HandleFunc("POST /totp/disable", s.handleTOTPDisable)
 	if s.opts.Recovery != nil {
 		mux.HandleFunc("POST /forgot-password", s.handleForgotPassword)
 		mux.HandleFunc("POST /reset-password", s.handleResetPassword)
@@ -157,7 +162,9 @@ func (s *Server) Handler() http.Handler {
 	if s.opts.Presentation != nil && s.actions != nil {
 		mux.HandleFunc("GET /{$}", s.handleHTMLHome)
 		mux.HandleFunc("GET /login", s.handleHTMLLogin)
+		mux.HandleFunc("GET /login/totp", s.handleHTMLLoginTOTP)
 		mux.HandleFunc("GET /signup", s.handleHTMLSignup)
+		mux.HandleFunc("GET /totp", s.handleHTMLTOTP)
 		mux.HandleFunc("POST /actions/{actionName}", s.handleHTMLAction)
 		mux.HandleFunc("GET /actions/results/{nonce}", s.handleHTMLResult)
 	}
@@ -294,6 +301,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token, err := s.auth.Login(r.Context(), r.PostFormValue("username"), r.PostFormValue("password"))
+	var challenge *auth.ChallengeError
 	failed := errors.Is(err, auth.ErrInvalidCredentials)
 	if ipErr := s.loginIP.finish(ipSlot, failed, false); ipErr != nil {
 		rateLimitUnavailable(w, ipErr)
@@ -307,8 +315,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fmt.Fprintln(w, "logged in")
+	case errors.As(err, &challenge):
+		s.setChallengeCookie(w, challenge.Token, int(5*time.Minute/time.Second))
+		if s.htmlForm(r) {
+			http.Redirect(w, r, "/login/totp", http.StatusSeeOther)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, "totp required\n%s\n", challenge.Token)
 	case errors.Is(err, auth.ErrInvalidCredentials):
 		s.authError(w, r, "login", "invalid username or password", http.StatusUnauthorized)
+	case errors.Is(err, auth.ErrTOTPUnavailable):
+		http.Error(w, "totp unavailable", http.StatusServiceUnavailable)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
