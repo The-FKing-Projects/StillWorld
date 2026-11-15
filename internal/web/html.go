@@ -34,27 +34,29 @@ type htmlForm struct {
 }
 
 type htmlPage struct {
-	Title         string
-	Description   string
-	Username      string
-	Turns         *int64
-	Sections      []presentation.Section
-	Forms         []htmlForm
-	AuthKind      string
-	Message       string
-	Recovery      bool
-	NoGame        bool
-	ResetDone     bool
-	RetryAction   string
-	RetryFields   url.Values
-	CanVerify     bool
-	CanTOTP       bool
-	CanPasskey    bool
-	PasskeyPage   bool
-	VerifyPage    bool
-	Email         string
-	EmailVerified bool
-	TOTPURL       string
+	Title           string
+	Description     string
+	Username        string
+	Turns           *int64
+	Sections        []presentation.Section
+	Forms           []htmlForm
+	AuthKind        string
+	Message         string
+	Recovery        bool
+	NoGame          bool
+	ResetDone       bool
+	RetryAction     string
+	RetryFields     url.Values
+	CanVerify       bool
+	CanTOTP         bool
+	CanPasskey      bool // navigation link when WebAuthn is configured
+	PasskeyCeremony bool // emit ceremony JS + relaxed CSP (enrol/assert pages only)
+	PasskeyPage     bool
+	PasskeyDeleteID string
+	VerifyPage      bool
+	Email           string
+	EmailVerified   bool
+	TOTPURL         string
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -140,7 +142,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <label for="label">Label (optional)</label><input id="label" name="label" maxlength="64" autocomplete="off">
 <p><button type="button" id="passkey-register">Register a passkey</button></p>
 <form method="post" action="/passkeys/delete"><input type="hidden" name="_html" value="1">
-<label for="id">Passkey id</label><input id="id" name="id" inputmode="numeric" required>
+<label for="id">Passkey id</label><input id="id" name="id" inputmode="numeric" required value="{{.PasskeyDeleteID}}">
 <label for="password">Current password</label><input id="password" name="password" type="password" autocomplete="current-password" required minlength="8">
 <p><button type="submit">Remove passkey</button></p></form>
 <p id="passkey-status" class="notice" hidden role="status"></p>
@@ -155,7 +157,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 <button type="submit">Retry the original action</button></form>{{end}}
 {{if and (not .AuthKind) (not .Forms) (not .Recovery) (not .VerifyPage) (not .PasskeyPage)}}<p><a href="/">Return to the game</a></p>{{end}}
 </main>
-{{if .CanPasskey}}<script>
+{{if .PasskeyCeremony}}<script>
 (function(){
 function b64urlToBuf(s){s=s.replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';var bin=atob(s),buf=new Uint8Array(bin.length);for(var i=0;i<bin.length;i++)buf[i]=bin.charCodeAt(i);return buf.buffer}
 function bufToB64url(buf){var bytes=new Uint8Array(buf),s='';for(var i=0;i<bytes.length;i++)s+=String.fromCharCode(bytes[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
@@ -196,7 +198,7 @@ func validatePageForms(forms []presentation.Form) error {
 func renderHTML(w http.ResponseWriter, status int, page htmlPage) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	csp := "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-	if page.CanPasskey {
+	if page.PasskeyCeremony {
 		csp = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
 	}
 	w.Header().Set("Content-Security-Policy", csp)
@@ -292,7 +294,8 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 	}
 	data := htmlPage{
 		Title: page.Title, Description: page.Description, Username: account.Username,
-		Sections: page.Sections, CanVerify: s.opts.Recovery != nil, CanTOTP: s.totp() != nil, CanPasskey: s.webauthn() != nil,
+		Sections: page.Sections, CanVerify: s.opts.Recovery != nil, CanTOTP: s.totp() != nil,
+		CanPasskey: s.webauthn() != nil,
 	}
 	if reader, ok := s.actions.(turnsReader); ok {
 		ipSlot, status := s.reserveActionIP(r)

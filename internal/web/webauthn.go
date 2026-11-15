@@ -137,8 +137,16 @@ func (s *Server) handlePasskeyDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		fmt.Fprintln(w, "passkey deleted")
 	case errors.Is(err, auth.ErrInvalidCredentials):
-		s.authError(w, r, "passkeys/delete", "invalid password", http.StatusUnauthorized)
+		if s.htmlForm(r) {
+			s.renderPasskeysPage(w, r, acct, "invalid password", http.StatusUnauthorized, strconv.FormatInt(rowID, 10))
+			return
+		}
+		http.Error(w, "invalid password", http.StatusUnauthorized)
 	case errors.Is(err, auth.ErrWebAuthnCredentialMissing):
+		if s.htmlForm(r) {
+			s.renderPasskeysPage(w, r, acct, "passkey not found", http.StatusNotFound, strconv.FormatInt(rowID, 10))
+			return
+		}
 		http.Error(w, "passkey not found", http.StatusNotFound)
 	default:
 		log.Print("passkey delete failed")
@@ -237,6 +245,10 @@ func (s *Server) handleHTMLPasskeys(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	s.renderPasskeysPage(w, r, account, "", http.StatusOK, "")
+}
+
+func (s *Server) renderPasskeysPage(w http.ResponseWriter, r *http.Request, account auth.Account, message string, status int, deleteID string) {
 	creds, err := s.webauthn().ListPasskeys(r.Context(), account.ID)
 	if err != nil {
 		log.Print("list passkeys failed")
@@ -246,8 +258,16 @@ func (s *Server) handleHTMLPasskeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var b strings.Builder
+	if message != "" {
+		b.WriteString(message)
+		if len(creds) > 0 {
+			b.WriteString(" ")
+		}
+	}
 	if len(creds) == 0 {
-		b.WriteString("No passkeys registered yet.")
+		if message == "" {
+			b.WriteString("No passkeys registered yet.")
+		}
 	} else {
 		b.WriteString("Registered passkeys:")
 		for _, c := range creds {
@@ -258,12 +278,11 @@ func (s *Server) handleHTMLPasskeys(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprintf(&b, " [%d] %s", c.ID, label)
 		}
 	}
-	renderHTML(w, http.StatusOK, htmlPage{
+	renderHTML(w, status, htmlPage{
 		Title: "Passkeys", Username: account.Username,
 		Description: "Optional passkeys as a second factor after your password. Registration uses a short browser ceremony; game actions stay text-first.",
-		Message:     b.String(),
-		CanPasskey:  true,
-		PasskeyPage: true,
+		Message:     b.String(), CanPasskey: true, PasskeyPage: true,
+		PasskeyCeremony: true, PasskeyDeleteID: deleteID,
 	})
 }
 
