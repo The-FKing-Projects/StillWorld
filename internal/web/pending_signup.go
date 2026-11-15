@@ -26,6 +26,27 @@ func (s *Server) handleDeferredSignup(w http.ResponseWriter, r *http.Request, em
 		http.Error(w, "signup temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	// StartPendingSignup hashes with Argon2id; share the login/signup hash budget.
+	if !s.acquire(r.Context()) {
+		http.Error(w, "server busy", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.release()
+
+	ipSlot, err := s.signupIP.reserve(r.Context(), s.clientIP(r))
+	if err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
+	if ipSlot == nil {
+		http.Error(w, "too many signups; try again later", http.StatusTooManyRequests)
+		return
+	}
+	if err := s.signupIP.finish(ipSlot, true, false); err != nil {
+		rateLimitUnavailable(w, err)
+		return
+	}
+
 	select {
 	case s.recoverySlots <- struct{}{}:
 	default:

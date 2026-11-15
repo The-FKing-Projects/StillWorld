@@ -126,7 +126,7 @@ func TestLoginCannotCreateSessionFromStalePassword(t *testing.T) {
 	}
 	loginResult := make(chan error, 1)
 	go func() {
-		_, err := s.createSession(ctx, id, oldHash)
+		_, err := s.createSession(ctx, id, oldHash, "password123")
 		loginResult <- err
 	}()
 	waitForAccountLock(t, ctx, s.DB, pid, loginResult)

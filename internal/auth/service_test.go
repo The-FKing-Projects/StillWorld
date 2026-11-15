@@ -111,6 +111,124 @@ func TestLoginAuthenticateLogout(t *testing.T) {
 	}
 }
 
+func TestLoginRehashesWeakerPassword(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+
+	// Accounts are created with testParams (8/1/1). Raise the service target so
+	// the stored hash is weaker and login upgrades it.
+	weaker, err := HashPassword("password123", Params{MemoryKiB: 8, Iterations: 1, Parallelism: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.params = Params{MemoryKiB: 16, Iterations: 1, Parallelism: 1}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, weaker, id); err != nil {
+		t.Fatal(err)
+	}
+	if !NeedsRehash(weaker, s.params) {
+		t.Fatal("fixture must need rehash")
+	}
+	if _, err := s.Login(ctx, name, "password123"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	var stored string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if NeedsRehash(stored, s.params) {
+		t.Fatalf("stored hash still weaker: %s", stored)
+	}
+	if !strings.Contains(stored, "m=16,t=1,p=1") {
+		t.Fatalf("expected upgraded params in hash: %s", stored)
+	}
+	ok, err := VerifyPassword("password123", stored)
+	if err != nil || !ok {
+		t.Fatalf("upgraded hash verify: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestLoginDoesNotDowngradeStrongerPassword(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	stronger, err := HashPassword("password123", Params{MemoryKiB: 64, Iterations: 2, Parallelism: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, stronger, id); err != nil {
+		t.Fatal(err)
+	}
+	if NeedsRehash(stronger, s.params) {
+		t.Fatal("stronger hash must not need rehash against testParams")
+	}
+	if _, err := s.Login(ctx, name, "password123"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	var stored string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != stronger {
+		t.Fatalf("stronger hash was changed: got %s", stored)
+	}
+}
+
+func TestLoginRehashPreservesStrongerAxes(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	// Stronger memory than the raised service target, weaker iterations.
+	mixed, err := HashPassword("password123", Params{MemoryKiB: 64, Iterations: 1, Parallelism: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.params = Params{MemoryKiB: 16, Iterations: 2, Parallelism: 1}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, mixed, id); err != nil {
+		t.Fatal(err)
+	}
+	if !NeedsRehash(mixed, s.params) {
+		t.Fatal("mixed hash must need rehash")
+	}
+	if _, err := s.Login(ctx, name, "password123"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	var stored string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stored, "m=64,t=2,p=1") {
+		t.Fatalf("expected per-axis max params in hash: %s", stored)
+	}
+}
+
+func TestCreateSessionAcceptsConcurrentRehash(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	var oldHash string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&oldHash); err != nil {
+		t.Fatal(err)
+	}
+	s.params = Params{MemoryKiB: 16, Iterations: 1, Parallelism: 1}
+	upgraded, err := HashPassword("password123", UpgradeParams(Params{MemoryKiB: 8, Iterations: 1, Parallelism: 1}, s.params))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, upgraded, id); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a login that verified the pre-rehash encoding, then lost the race.
+	token, err := s.createSession(ctx, id, oldHash, "password123")
+	if err != nil {
+		t.Fatalf("createSession after concurrent rehash: %v", err)
+	}
+	if _, err := s.Authenticate(ctx, token); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	_ = name
+}
+
 func TestSessionExpiry(t *testing.T) {
 	s, now := newTestService(t)
 	ctx := context.Background()
