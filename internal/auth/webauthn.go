@@ -463,9 +463,9 @@ func (s *Service) DeleteExpiredWebAuthnState(ctx context.Context) (int64, error)
 }
 
 type webAuthnUser struct {
-	id       []byte
-	name     string
-	creds    []webauthn.Credential
+	id    []byte
+	name  string
+	creds []webauthn.Credential
 }
 
 func (u *webAuthnUser) WebAuthnID() []byte                         { return u.id }
