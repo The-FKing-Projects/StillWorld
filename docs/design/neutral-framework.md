@@ -711,10 +711,11 @@ Implementation does not imply a stable API or a production-ready game.
   outcomes, authentication, and admission controls. Relay demonstrates
   server-rendered forms; the counter example demonstrates integer input.
   Additional form fields and presentation remain future work.
-- Deployment guidance (#22) and authentication limitations (#23) are
-  documented. Authentication and action IP/player limits default to in-memory
-  counters, with an optional PostgreSQL-backed shared store; concurrent work
-  slots remain per-process. Initial local administrator commands are available.
+- Deployment guidance (#22) is documented. Authentication and rate-limit
+  remediations from #23 landed (PR #45): optional shared PostgreSQL-backed
+  auth and action IP/player limits, deferred verified signup, IP-only login
+  throttling, and local administrator commands. Concurrent password-hash,
+  action, and delivery slots remain per-process for single-VPS staging.
 - Continue to harden the public API and keep the separate-module example and
   PostgreSQL acceptance tests in the verification workflow.
 
