@@ -4,11 +4,17 @@ This guide describes a Debian or Ubuntu single-server setup using PostgreSQL,
 systemd, and Nginx as the TLS-terminating reverse proxy. Adapt package and
 certificate commands for other distributions.
 
+A StillWorld deployment hosts **one** persistent world. The game owns the
+executable: for private or staging use today, deploy the **Relay** example
+(`examples/relay`). The framework's `cmd/stillworld` binary is auth and
+operator tooling only—it does not register a game. The Counter example is for
+local development (insecure cookies) and is not a remote staging target.
+
 > **Deployment status:** StillWorld's HTTP authentication endpoints are
 > experimental and are not ready for public deployment. Use this procedure for
 > private or staging environments only. Do not expose the service to the public
 > internet until the project has explicitly cleared the remaining security and
-> operational readiness work.
+> operational readiness work. There is not yet a configured production game.
 
 ## Host and database
 
@@ -54,21 +60,26 @@ sudoedit /etc/stillworld/stillworld.env
 ```
 
 Put the following settings in `/etc/stillworld/stillworld.env`, replacing
-`HEX_PASSWORD` with the generated database password:
+`HEX_PASSWORD` with the generated database password and
+`HEX_REQUEST_KEY` with a separate value from `openssl rand -hex 32`:
 
 ```ini
 STILLWORLD_DATABASE_URL=postgres://stillworld:HEX_PASSWORD@127.0.0.1:5432/stillworld?sslmode=disable
+RELAY_REQUEST_KEY=HEX_REQUEST_KEY
 STILLWORLD_LISTEN_ADDR=127.0.0.1:8080
 STILLWORLD_BEHIND_PROXY=true
 STILLWORLD_INSECURE_COOKIES=false
 ```
 
-`STILLWORLD_DATABASE_URL` is required. The listen address defaults to
-`127.0.0.1:8080`; set it explicitly here so the service is not exposed beyond
-the host. `STILLWORLD_BEHIND_PROXY=true` is appropriate only with the trusted
-Nginx configuration below. The application trusts the rightmost
-`X-Forwarded-For` value for rate limiting, so do not enable this setting if
-untrusted clients can connect directly or supply that header. Never set
+`STILLWORLD_DATABASE_URL` and `RELAY_REQUEST_KEY` are required. The request
+key must be at least 32 bytes encoded as hexadecimal; keep it stable while any
+signed action request IDs remain valid. The listen address defaults to
+`127.0.0.1:8082` in Relay's local README; set `127.0.0.1:8080` here so the
+service matches the Nginx example below and is not exposed beyond the host.
+`STILLWORLD_BEHIND_PROXY=true` is appropriate only with the trusted Nginx
+configuration below. The application trusts the rightmost `X-Forwarded-For`
+value for rate limiting, so do not enable this setting if untrusted clients can
+connect directly or supply that header. Never set
 `STILLWORLD_INSECURE_COOKIES=true` on a remotely reachable deployment.
 
 ### Optional TOTP encryption key
@@ -125,19 +136,28 @@ login IP rate limit. When both TOTP and a passkey are enrolled, either second
 factor may finish the login challenge. This is a private/staging control, not
 a public-deployment clearance.
 
-Build the binary from a reviewed source revision on a trusted build host, then
-transfer it to the server through a trusted channel:
+Build the Relay binary from a reviewed source revision on a trusted build host,
+then transfer it to the server through a trusted channel. Relay is a separate
+Go module under `examples/relay`, so build from that directory (the repository
+root module does not contain this package):
 
 ```sh
-go build -trimpath -o stillworld ./cmd/stillworld
-sudo install -o root -g root -m 0755 stillworld /usr/local/bin/stillworld
+cd examples/relay
+go build -trimpath -o relay .
+sudo install -o root -g root -m 0755 relay /usr/local/bin/relay
 ```
 
-Create `/etc/systemd/system/stillworld-migrate.service`:
+Optionally build the framework operator binary from the repository root
+(`go build -trimpath -o stillworld ./cmd/stillworld`) for `list-accounts`,
+`reset-password`, `disable-account`, `enable-account`, `revoke-sessions`, and
+`benchmark-password`. Those commands are not part of the Relay game binary;
+point them at the same `STILLWORLD_DATABASE_URL` when needed.
+
+Create `/etc/systemd/system/relay-migrate.service`:
 
 ```ini
 [Unit]
-Description=Apply StillWorld database migrations
+Description=Apply StillWorld and Relay database migrations
 Wants=network-online.target
 After=network-online.target postgresql.service
 Requires=postgresql.service
@@ -147,14 +167,14 @@ Type=oneshot
 User=stillworld
 Group=stillworld
 EnvironmentFile=/etc/stillworld/stillworld.env
-ExecStart=/usr/local/bin/stillworld migrate
+ExecStart=/usr/local/bin/relay migrate
 ```
 
-Create `/etc/systemd/system/stillworld.service`:
+Create `/etc/systemd/system/relay.service`:
 
 ```ini
 [Unit]
-Description=StillWorld HTTP service
+Description=StillWorld Relay HTTP service
 Wants=network-online.target
 After=network-online.target postgresql.service
 Requires=postgresql.service
@@ -164,7 +184,7 @@ Type=simple
 User=stillworld
 Group=stillworld
 EnvironmentFile=/etc/stillworld/stillworld.env
-ExecStart=/usr/local/bin/stillworld serve
+ExecStart=/usr/local/bin/relay serve
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
@@ -182,12 +202,12 @@ automatically migrate the database:
 
 ```sh
 sudo systemctl daemon-reload
-sudo systemctl start stillworld-migrate.service
-sudo systemctl enable --now stillworld.service
-sudo systemctl --no-pager --full status stillworld.service
+sudo systemctl start relay-migrate.service
+sudo systemctl enable --now relay.service
+sudo systemctl --no-pager --full status relay.service
 ```
 
-Check `journalctl -u stillworld.service` if startup fails. Keep the environment
+Check `journalctl -u relay.service` if startup fails. Keep the environment
 file out of source control and backups that are not protected as secrets.
 
 ## TLS reverse proxy
@@ -288,7 +308,8 @@ on a database row, so monitor PostgreSQL and load-test before enabling this
 experimental option. Keep the migration in place while any instance uses it.
 
 On the target host, the optional `stillworld benchmark-password` command
-measures password hashing without connecting to a database. It defaults to
+(from `./cmd/stillworld`) measures password hashing without connecting to a
+database. It defaults to
 three sequential hashes with the current default parameters (32 MiB, 3
 iterations, 2 lanes). For example, `stillworld benchmark-password
 -concurrency=4` measures batches of four simultaneous hashes, matching the
@@ -319,11 +340,13 @@ verified. Email on signup requires recovery/email delivery configuration;
 without it, omit the email field. Username conflicts remain visible.
 
 An administrator with database access can list account IDs, usernames, and
-account status with `stillworld list-accounts`, using `STILLWORLD_DATABASE_URL`
-from the protected service environment. It omits email addresses and prints
-usernames as quoted, escaped strings. The command displays up to 100 accounts
-per page; follow its `-after` hint to continue, or set `-limit` from 1 to 1000.
-Treat the output as account data and protect it accordingly.
+account status with the framework operator binary (`go build -o stillworld
+./cmd/stillworld`, then `stillworld list-accounts`), using
+`STILLWORLD_DATABASE_URL` from the protected service environment. It omits
+email addresses and prints usernames as quoted, escaped strings. The command
+displays up to 100 accounts per page; follow its `-after` hint to continue, or
+set `-limit` from 1 to 1000. Treat the output as account data and protect it
+accordingly.
 
 An administrator with access to the application database can reset an
 account's password locally:
@@ -345,10 +368,10 @@ Use `stillworld disable-account USERNAME` to prevent login and revoke existing
 sessions, and `stillworld enable-account USERNAME` to allow login again.
 Enabling does not restore revoked sessions. Requests authenticated before a
 disable may still finish. If a status change reports an unknown outcome,
-check `list-accounts` before retrying. Apply the latest framework migrations
-using the appropriate game migration command before deploying this version.
-Stop older application instances before using these controls: older versions
-do not enforce the disabled status.
+check `list-accounts` before retrying. Apply the latest framework and Relay
+migrations with `relay migrate` before deploying this version. Stop older
+application instances before using these controls: older versions do not
+enforce the disabled status.
 
 To sign an account out without changing its password or status, run
 `stillworld revoke-sessions USERNAME`. This revokes its current sessions, but
@@ -360,8 +383,9 @@ password or disable the account instead.
 
 ## Optional password recovery
 
-Self-service recovery is disabled by default. To enable it in the main server
-or either example, add these settings to the protected service environment:
+Self-service recovery is disabled by default. To enable it for Relay (or the
+auth-only framework server / Counter example), add these settings to the
+protected service environment:
 
 ```ini
 STILLWORLD_RECOVERY_ORIGIN=https://play.example.net
@@ -477,22 +501,44 @@ usable. Do not test a restore over the live database.
 
 ## Updating
 
-Use a reviewed release or source revision and build the replacement binary
-before the maintenance window. Back up the database, then:
+Use a reviewed release or source revision and build the replacement Relay
+binary before the maintenance window. Back up the database, then:
 
 ```sh
-sudo systemctl stop stillworld.service
-sudo install -o root -g root -m 0755 ./stillworld /usr/local/bin/stillworld
-sudo systemctl start stillworld-migrate.service
-sudo systemctl start stillworld.service
-sudo systemctl --no-pager --full status stillworld.service
+sudo systemctl stop relay.service
+sudo install -o root -g root -m 0755 ./relay /usr/local/bin/relay
+sudo systemctl start relay-migrate.service
+sudo systemctl start relay.service
+sudo systemctl --no-pager --full status relay.service
 curl --fail --silent --show-error https://play.example.net/healthz
 ```
 
 `/healthz` confirms that the HTTP process responds; it is not a database
 readiness or full application check. Review the service journal and exercise
-the intended staging flows after each update. Schema migrations may not be
+the intended staging flows after each update (signup or login, then at least
+one Relay action such as salvage or repair). Schema migrations may not be
 reversible: do not assume that reinstalling an older binary rolls back the
 database. If an update fails after a schema change, stop the service and use a
 verified database backup and a rehearsed restore procedure before resuming
 traffic.
+
+## Local loopback smoke (Relay)
+
+Before a remote private VPS, exercise Relay against a disposable local
+PostgreSQL database. From the nested module directory:
+
+```sh
+cd examples/relay
+export STILLWORLD_DATABASE_URL='postgres://stillworld:HEX_PASSWORD@127.0.0.1:5432/stillworld?sslmode=disable'
+export RELAY_REQUEST_KEY="$(openssl rand -hex 32)"
+export STILLWORLD_INSECURE_COOKIES=true
+export STILLWORLD_LISTEN_ADDR=127.0.0.1:8082
+go run . migrate
+go run . serve
+```
+
+In another shell, confirm `/healthz`, create an account without email, sign
+in, then run the documented salvage API loop from
+[examples/relay/README.md](../examples/relay/README.md#api-loop). Use
+`X-Stillworld-Request: 1` for non-browser clients. This local smoke does not
+clear public-deployment readiness.
