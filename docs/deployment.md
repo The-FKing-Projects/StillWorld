@@ -137,18 +137,21 @@ factor may finish the login challenge. This is a private/staging control, not
 a public-deployment clearance.
 
 Build the Relay binary from a reviewed source revision on a trusted build host,
-then transfer it to the server through a trusted channel. From the repository
-root:
+then transfer it to the server through a trusted channel. Relay is a separate
+Go module under `examples/relay`, so build from that directory (the repository
+root module does not contain this package):
 
 ```sh
-go build -trimpath -o relay ./examples/relay
+cd examples/relay
+go build -trimpath -o relay .
 sudo install -o root -g root -m 0755 relay /usr/local/bin/relay
 ```
 
-Optionally build `./cmd/stillworld` on an operator workstation for
-`list-accounts`, `reset-password`, `disable-account`, `enable-account`,
-`revoke-sessions`, and `benchmark-password`. Those commands are not part of the
-Relay game binary; point them at the same `STILLWORLD_DATABASE_URL` when needed.
+Optionally build the framework operator binary from the repository root
+(`go build -trimpath -o stillworld ./cmd/stillworld`) for `list-accounts`,
+`reset-password`, `disable-account`, `enable-account`, `revoke-sessions`, and
+`benchmark-password`. Those commands are not part of the Relay game binary;
+point them at the same `STILLWORLD_DATABASE_URL` when needed.
 
 Create `/etc/systemd/system/relay-migrate.service`:
 
@@ -522,10 +525,10 @@ traffic.
 ## Local loopback smoke (Relay)
 
 Before a remote private VPS, exercise Relay against a disposable local
-PostgreSQL database. From `examples/relay` (or the repository root with the
-module path above):
+PostgreSQL database. From the nested module directory:
 
 ```sh
+cd examples/relay
 export STILLWORLD_DATABASE_URL='postgres://stillworld:HEX_PASSWORD@127.0.0.1:5432/stillworld?sslmode=disable'
 export RELAY_REQUEST_KEY="$(openssl rand -hex 32)"
 export STILLWORLD_INSECURE_COOKIES=true
