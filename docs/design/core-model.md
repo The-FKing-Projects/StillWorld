@@ -71,9 +71,10 @@ Status: draft. These are design decisions, not a finished specification.
   default or shared through PostgreSQL). Recovery request responses are generic
   for eligible and ineligible addresses; verification is signed-in and returns a
   distinct message when the account has no unverified address. These controls
-  do not establish comprehensive enumeration or abuse resistance. Remaining
-  authentication and rate-limit remediations are tracked in issue #23
-  (documenting a limitation is not the same as remediating it).
+  do not establish comprehensive enumeration or abuse resistance. Issue #23
+  remediations landed (PR #45); concurrent password-hash, action, and delivery
+  slots remain per-process by design for single-VPS staging—revisit only if
+  multi-server production is planned. Not production-ready.
 - Main-executable configuration for choosing a downstream game and its Turns
   policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup
