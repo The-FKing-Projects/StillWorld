@@ -197,15 +197,20 @@ environment variables:
 | Concurrent action work | 64 requests; excess requests receive `503` |
 
 By default, these limits are per-process and in memory: they are not shared
-across servers and restart with the process. The password-hash work uses
-Argon2id with 32 MiB per operation by default (3 iterations, 2 lanes), so four
-simultaneous operations can consume about 128 MiB for hashing alone, in
-addition to PostgreSQL, the application, and the operating system. These
-defaults follow the staging latency budget in issue #18 (roughly 250–400 ms
-per hash on a typical small host); re-measure with `stillworld
-benchmark-password` on the target host. Load-test and monitor resource use; do
-not treat these limits as a guarantee of public-service capacity or abuse
-resistance.
+across servers and restart with the process. New password hashes use Argon2id
+with 32 MiB per operation by default (3 iterations, 2 lanes). Four concurrent
+hash slots therefore budget about **128 MiB** when every in-flight operation
+uses those defaults (login, username-only signup, and deferred signup
+hashing). Verification and no-downgrade rehashing still honor parameters
+embedded in each stored hash, so accounts that retain stronger legacy costs
+(for example the previous 64 MiB defaults, up to the supported 256 MiB
+decode cap) can make four concurrent logins consume more than 128 MiB for
+hashing alone, in addition to PostgreSQL, the application, and the operating
+system. These defaults follow the staging latency budget in issue #18
+(roughly 250–400 ms per hash on a typical small host); re-measure with
+`stillworld benchmark-password` on the target host. Load-test and monitor
+resource use; do not treat these limits as a guarantee of public-service
+capacity or abuse resistance.
 
 For shared, restart-persistent login, signup, password recovery, email
 verification, and action IP/player limits, apply the latest migrations and set
