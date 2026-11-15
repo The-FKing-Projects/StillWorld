@@ -1,0 +1,124 @@
+# One-shot / idempotent tracker bootstrap for STI-18 (option B).
+# Creates or updates Priority/Design/Investigation labels and the two phase milestones.
+name: Tracker bootstrap
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/tracker-bootstrap.yml
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Upsert labels and milestones
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const labels = [
+              {
+                name: 'Priority: High',
+                color: 'b60205',
+                description: 'Core reliability or next-release foundation.',
+              },
+              {
+                name: 'Priority: Medium',
+                color: 'fbca04',
+                description: 'Useful improvements after core reliability work.',
+              },
+              {
+                name: 'Priority: Low',
+                color: 'c2e0c6',
+                description: 'Deferred optional improvements.',
+              },
+              {
+                name: 'Design',
+                color: '758c88',
+                description: 'Architecture, workflows, data models, and system design.',
+              },
+              {
+                name: 'Investigation',
+                color: 'd4c5f9',
+                description: 'Reproduction and evidence needed before choosing a fix.',
+              },
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: label.name });
+                await github.rest.issues.updateLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+                core.info(`Updated label ${label.name}`);
+              } catch (err) {
+                if (err.status !== 404) throw err;
+                await github.rest.issues.createLabel({
+                  owner,
+                  repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description,
+                });
+                core.info(`Created label ${label.name}`);
+              }
+            }
+
+            const milestones = [
+              {
+                title: 'Foundations — auth, Turns, Relay',
+                state: 'closed',
+                description:
+                  'Retrospective milestone for the landed first-sprint foundations: accounts/sessions, experimental HTTP auth, Turns, action framework / Relay, password recovery, Argon2 budgets, TOTP, passkeys, auth remediations, staging docs/local smoke, and game-owned binary / Turns policy docs. Not production-ready.',
+              },
+              {
+                title: 'Staging readiness',
+                state: 'open',
+                description:
+                  'Next open phase: remote VPS staging for Relay when wanted; maintain PostgreSQL-backed coverage of migration/cleanup/action locking and retry; richer HTML forms/presentation as games need them. Not a promise of public production readiness.',
+              },
+            ];
+
+            const existing = await github.paginate(github.rest.issues.listMilestones, {
+              owner,
+              repo,
+              state: 'all',
+              per_page: 100,
+            });
+            const byTitle = new Map(existing.map((m) => [m.title, m]));
+
+            for (const ms of milestones) {
+              const found = byTitle.get(ms.title);
+              if (found) {
+                await github.rest.issues.updateMilestone({
+                  owner,
+                  repo,
+                  milestone_number: found.number,
+                  title: ms.title,
+                  state: ms.state,
+                  description: ms.description,
+                });
+                core.info(`Updated milestone #${found.number} ${ms.title} (${ms.state})`);
+              } else {
+                const created = await github.rest.issues.createMilestone({
+                  owner,
+                  repo,
+                  title: ms.title,
+                  state: ms.state,
+                  description: ms.description,
+                });
+                core.info(`Created milestone #${created.data.number} ${ms.title} (${ms.state})`);
+              }
+            }
