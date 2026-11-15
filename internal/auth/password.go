@@ -71,8 +71,8 @@ func VerifyPassword(password, encoded string) (bool, error) {
 }
 
 // NeedsRehash reports whether encoded uses parameters weaker than current on
-// any axis (memory, iterations, or parallelism). Stronger or equal hashes are
-// left alone so a retune that lowers cost does not downgrade existing hashes.
+// any axis (memory, iterations, or parallelism). When true, callers should
+// rehash with UpgradeParams so stronger axes are preserved.
 func NeedsRehash(encoded string, current Params) bool {
 	p, _, _, err := decodeHash(encoded)
 	if err != nil {
@@ -81,6 +81,26 @@ func NeedsRehash(encoded string, current Params) bool {
 	return p.MemoryKiB < current.MemoryKiB ||
 		p.Iterations < current.Iterations ||
 		p.Parallelism < current.Parallelism
+}
+
+// UpgradeParams returns the per-axis maximum of stored and current so a rehash
+// never lowers memory, iterations, or parallelism.
+func UpgradeParams(stored, current Params) Params {
+	out := Params{
+		MemoryKiB:   stored.MemoryKiB,
+		Iterations:  stored.Iterations,
+		Parallelism: stored.Parallelism,
+	}
+	if current.MemoryKiB > out.MemoryKiB {
+		out.MemoryKiB = current.MemoryKiB
+	}
+	if current.Iterations > out.Iterations {
+		out.Iterations = current.Iterations
+	}
+	if current.Parallelism > out.Parallelism {
+		out.Parallelism = current.Parallelism
+	}
+	return out
 }
 
 func decodeHash(encoded string) (Params, []byte, []byte, error) {

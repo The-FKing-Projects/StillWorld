@@ -32,10 +32,11 @@ Status: draft. These are design decisions, not a finished specification.
 
 - **Passwords are hashed with Argon2id.** Staging defaults (issue #18 budget B)
   are 32 MiB memory, 3 iterations, and 2 lanes, with up to four concurrent
-  hash slots in the HTTP layer. Successful login rehashes when stored
-  parameters are weaker than the current defaults; stronger hashes are not
-  downgraded. These are private/staging values, not a public-deployment
-  clearance.
+  hash slots in the HTTP layer (login, signup, and deferred signup hashing).
+  Successful login rehashes when stored parameters are weaker on any axis,
+  using the per-axis maximum of stored and current values so stronger axes
+  are not downgraded. These are private/staging values, not a
+  public-deployment clearance.
 - **Sessions are server-side.** A random token in a cookie references a session
   stored in PostgreSQL, so sessions can be revoked immediately. Sessions use
   sliding expiry: 30 days since last activity, with a hard cap of 90 days.

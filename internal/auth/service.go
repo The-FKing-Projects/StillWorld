@@ -167,27 +167,37 @@ func (s *Service) createSession(ctx context.Context, id int64, verifiedHash, pas
 	if err != nil {
 		return "", err
 	}
-	rehash := NeedsRehash(verifiedHash, s.params)
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin session transaction: %w", err)
 	}
 	var currentHash string
-	// Serialize session creation with account changes, then recheck the verified hash.
-	// FOR UPDATE when rehashing so a concurrent reset cannot race the upgrade.
-	lockSQL := `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR SHARE`
-	if rehash {
-		lockSQL = `SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`
-	}
-	err = tx.QueryRowContext(ctx, lockSQL, id).Scan(&currentHash)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && currentHash != verifiedHash) {
+	// FOR UPDATE serializes login with password resets and concurrent rehashes.
+	err = tx.QueryRowContext(ctx,
+		`SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`, id).Scan(&currentHash)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", rollbackAuth(tx, ErrInvalidCredentials)
 	}
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("lock account for login: %w", err))
 	}
-	if rehash {
-		newHash, herr := HashPassword(password, s.params)
+	if currentHash != verifiedHash {
+		// Another login may have rehashed, or a reset may have replaced the
+		// password. Re-verify; reject only when the password no longer matches.
+		ok, verr := VerifyPassword(password, currentHash)
+		if verr != nil {
+			return "", rollbackAuth(tx, fmt.Errorf("verify current password hash: %w", verr))
+		}
+		if !ok {
+			return "", rollbackAuth(tx, ErrInvalidCredentials)
+		}
+	}
+	if NeedsRehash(currentHash, s.params) {
+		stored, _, _, derr := decodeHash(currentHash)
+		if derr != nil {
+			return "", rollbackAuth(tx, fmt.Errorf("decode password hash: %w", derr))
+		}
+		newHash, herr := HashPassword(password, UpgradeParams(stored, s.params))
 		if herr != nil {
 			return "", rollbackAuth(tx, fmt.Errorf("rehash password: %w", herr))
 		}

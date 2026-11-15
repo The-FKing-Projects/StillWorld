@@ -89,6 +89,10 @@ func TestNeedsRehash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	mixed, err := HashPassword("pw", Params{MemoryKiB: 64 * 1024, Iterations: 1, Parallelism: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !NeedsRehash(weaker, current) {
 		t.Fatal("weaker hash should need rehash")
 	}
@@ -98,7 +102,21 @@ func TestNeedsRehash(t *testing.T) {
 	if NeedsRehash(stronger, current) {
 		t.Fatal("stronger hash must not be downgraded")
 	}
+	if !NeedsRehash(mixed, current) {
+		t.Fatal("mixed hash weaker on iterations should need rehash")
+	}
 	if NeedsRehash("not-a-hash", current) {
 		t.Fatal("malformed encoding should not report NeedsRehash")
+	}
+}
+
+func TestUpgradeParams(t *testing.T) {
+	got := UpgradeParams(
+		Params{MemoryKiB: 64 * 1024, Iterations: 1, Parallelism: 2},
+		Params{MemoryKiB: 32 * 1024, Iterations: 3, Parallelism: 1},
+	)
+	want := Params{MemoryKiB: 64 * 1024, Iterations: 3, Parallelism: 2}
+	if got != want {
+		t.Fatalf("UpgradeParams = %+v, want %+v", got, want)
 	}
 }

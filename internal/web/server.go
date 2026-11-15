@@ -230,6 +230,11 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		s.authError(w, r, "signup", "email signup requires email delivery configuration", http.StatusBadRequest)
 		return
 	}
+	if email != "" {
+		// Deferred signup acquires hashSlots itself around Argon2 work.
+		s.handleDeferredSignup(w, r, email)
+		return
+	}
 	if !s.acquire(r.Context()) {
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
 		return
@@ -247,10 +252,6 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.signupIP.finish(slot, true, false); err != nil {
 		rateLimitUnavailable(w, err)
-		return
-	}
-	if email != "" {
-		s.handleDeferredSignup(w, r, email)
 		return
 	}
 	_, err = s.auth.Register(r.Context(), r.PostFormValue("username"), "", r.PostFormValue("password"))

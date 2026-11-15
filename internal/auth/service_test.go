@@ -174,6 +174,61 @@ func TestLoginDoesNotDowngradeStrongerPassword(t *testing.T) {
 	}
 }
 
+func TestLoginRehashPreservesStrongerAxes(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	// Stronger memory than the raised service target, weaker iterations.
+	mixed, err := HashPassword("password123", Params{MemoryKiB: 64, Iterations: 1, Parallelism: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.params = Params{MemoryKiB: 16, Iterations: 2, Parallelism: 1}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, mixed, id); err != nil {
+		t.Fatal(err)
+	}
+	if !NeedsRehash(mixed, s.params) {
+		t.Fatal("mixed hash must need rehash")
+	}
+	if _, err := s.Login(ctx, name, "password123"); err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	var stored string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stored, "m=64,t=2,p=1") {
+		t.Fatalf("expected per-axis max params in hash: %s", stored)
+	}
+}
+
+func TestCreateSessionAcceptsConcurrentRehash(t *testing.T) {
+	s, _ := newTestService(t)
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	var oldHash string
+	if err := s.DB.QueryRowContext(ctx, `SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&oldHash); err != nil {
+		t.Fatal(err)
+	}
+	s.params = Params{MemoryKiB: 16, Iterations: 1, Parallelism: 1}
+	upgraded, err := HashPassword("password123", UpgradeParams(Params{MemoryKiB: 8, Iterations: 1, Parallelism: 1}, s.params))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE accounts SET password_hash = $1 WHERE id = $2`, upgraded, id); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a login that verified the pre-rehash encoding, then lost the race.
+	token, err := s.createSession(ctx, id, oldHash, "password123")
+	if err != nil {
+		t.Fatalf("createSession after concurrent rehash: %v", err)
+	}
+	if _, err := s.Authenticate(ctx, token); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	_ = name
+}
+
 func TestSessionExpiry(t *testing.T) {
 	s, now := newTestService(t)
 	ctx := context.Background()

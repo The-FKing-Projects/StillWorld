@@ -240,9 +240,12 @@ the application configuration; Argon2id parameters are compiled defaults. Do
 not lower them solely to hit a timing target.
 
 Successful logins rehash the stored password when the encoded parameters are
-weaker than the current defaults on memory, iterations, or parallelism.
-Stronger or equal hashes are left unchanged so a later cost reduction does not
-downgrade existing accounts.
+weaker than the current defaults on memory, iterations, or parallelism. The
+replacement uses the per-axis maximum of the stored and current parameters so
+a mixed hash is never downgraded on a stronger axis. Equal or uniformly
+stronger hashes are left unchanged. Login, username-only signup, and deferred
+email signup (pending-password hashing) all share the four concurrent hash
+slots; completion of a deferred signup does not hash and does not take a slot.
 
 Login throttling is per client IP only, so a distributed attacker can still
 attempt many usernames from many addresses. Signup without an email creates an

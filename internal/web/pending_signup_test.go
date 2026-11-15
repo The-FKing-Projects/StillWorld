@@ -178,6 +178,11 @@ func TestCompleteSignupDoesNotUseHashSlots(t *testing.T) {
 		func(r *http.Request) { r.RemoteAddr = "198.51.100.30:1" }).Code; got != http.StatusServiceUnavailable {
 		t.Fatalf("login with full hash slots = %d", got)
 	}
+	if got := post(handler, "/signup", url.Values{
+		"username": {"blocked"}, "email": {"blocked@example.com"}, "password": {"password123"},
+	}, func(r *http.Request) { r.RemoteAddr = "198.51.100.32:1" }).Code; got != http.StatusServiceUnavailable {
+		t.Fatalf("deferred signup with full hash slots = %d", got)
+	}
 	complete := post(handler, "/complete-signup", url.Values{"code": {code}},
 		func(r *http.Request) { r.RemoteAddr = "198.51.100.31:1" })
 	if complete.Code != http.StatusCreated {
