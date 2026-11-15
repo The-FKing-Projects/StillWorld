@@ -130,7 +130,8 @@ func TestReadinessRejectsDifferentMigrationHistory(t *testing.T) {
 }
 
 func TestConcurrentMigratorWaitsOnAdvisoryLock(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	d := testdb.Open(t)
 	migrations := fstest.MapFS{
 		"00001_counter.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
@@ -157,19 +158,20 @@ DROP TABLE game_lock_probe;
 		_ = conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked)
 	}()
 
-	blockedCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
-	defer cancel()
-	err = db.MigrateGameDeployment(blockedCtx, d, "counter", migrations)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("blocked migrator error = %v, want %v", err, context.DeadlineExceeded)
-	}
+	done := make(chan error, 1)
+	go func() {
+		done <- db.MigrateGameDeployment(ctx, d, "counter", migrations)
+	}()
+	// acquireMigrationLock polls pg_try_advisory_lock every 50ms; keep the
+	// lock held long enough that the waiting invocation has entered that loop.
+	waitForPollingMigrator(t, ctx, d, done)
 
 	var unlocked bool
 	if err := conn.QueryRowContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked); err != nil || !unlocked {
 		t.Fatalf("release held lock: unlocked=%v err=%v", unlocked, err)
 	}
-	if err := db.MigrateGameDeployment(ctx, d, "counter", migrations); err != nil {
-		t.Fatalf("migrate after lock release: %v", err)
+	if err := <-done; err != nil {
+		t.Fatalf("waiting migrator after lock release: %v", err)
 	}
 	if err := db.CheckGameDeploymentReady(ctx, d, "counter", migrations); err != nil {
 		t.Fatalf("readiness after migrate: %v", err)
@@ -221,6 +223,29 @@ DROP TABLE game_after_failure;
 	}
 	if err := db.CheckGameDeploymentReady(ctx, d, "counter", fixed); err != nil {
 		t.Fatalf("readiness after recovery: %v", err)
+	}
+}
+
+func waitForPollingMigrator(t *testing.T, ctx context.Context, d *sql.DB, result <-chan error) {
+	t.Helper()
+	// Confirm the waiting migrator has not finished and the game table is
+	// still absent, then stay blocked for a few try-lock intervals.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-result:
+			t.Fatalf("migrator finished before lock release: %v", err)
+		case <-ctx.Done():
+			t.Fatal("context canceled while waiting for polling migrator")
+		case <-time.After(20 * time.Millisecond):
+		}
+		var table sql.NullString
+		if err := d.QueryRowContext(ctx, `SELECT to_regclass('game_lock_probe')::text`).Scan(&table); err != nil {
+			t.Fatal(err)
+		}
+		if table.Valid && table.String != "" {
+			t.Fatal("game migration ran while advisory lock was still held")
+		}
 	}
 }
 
