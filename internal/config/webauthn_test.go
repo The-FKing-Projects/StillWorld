@@ -9,6 +9,31 @@ func TestWebAuthnFromEnvOptional(t *testing.T) {
 	}
 }
 
+func TestWebAuthnFromEnvEmptyPresentIsConfigured(t *testing.T) {
+	_, err := webAuthnFromLookup(func(k string) (string, bool) {
+		if k == "STILLWORLD_WEBAUTHN_RP_ID" {
+			return "", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatal("expected missing RP ID error for empty present var")
+	}
+	_, err = webAuthnFromLookup(func(k string) (string, bool) {
+		switch k {
+		case "STILLWORLD_WEBAUTHN_RP_ID":
+			return "localhost", true
+		case "STILLWORLD_WEBAUTHN_RP_ORIGINS":
+			return "  ", true
+		default:
+			return "", false
+		}
+	})
+	if err == nil {
+		t.Fatal("expected missing origins error for blank present var")
+	}
+}
+
 func TestWebAuthnFromEnvRequiresIDAndOrigins(t *testing.T) {
 	_, err := webAuthnFromLookup(func(k string) (string, bool) {
 		if k == "STILLWORLD_WEBAUTHN_RP_ID" {

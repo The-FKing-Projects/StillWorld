@@ -26,8 +26,20 @@ type webAuthnService interface {
 	LoginChallengeFactors(context.Context, string) (auth.SecondFactorInfo, error)
 }
 
+type webAuthnConfigured interface {
+	WebAuthnConfigured() bool
+}
+
 func (s *Server) webauthn() webAuthnService {
-	svc, _ := s.auth.(webAuthnService)
+	svc, ok := s.auth.(webAuthnService)
+	if !ok {
+		return nil
+	}
+	// *auth.Service always implements webAuthnService; require an explicit
+	// configured RP before advertising or serving passkey UI.
+	if c, ok := s.auth.(webAuthnConfigured); ok && !c.WebAuthnConfigured() {
+		return nil
+	}
 	return svc
 }
 

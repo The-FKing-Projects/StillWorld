@@ -12,6 +12,38 @@ import (
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
+func TestPasskeyUnavailableWithoutConfig(t *testing.T) {
+	database := testdb.Open(t)
+	service, err := auth.NewService(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(service, Options{
+		InsecureCookies: true,
+		Actions:         &fakeActionService{},
+		Presentation:    testPresentation{},
+	}).Handler()
+	if service.WebAuthnConfigured() {
+		t.Fatal("expected WebAuthn disabled")
+	}
+	page := get(handler, "/passkeys")
+	if page.Code != http.StatusServiceUnavailable || !strings.Contains(page.Body.String(), "not configured") {
+		t.Fatalf("passkeys page = %d %s", page.Code, page.Body)
+	}
+	if w := post(handler, "/signup", url.Values{
+		"username": {"nopkuser"}, "password": {"password123"},
+	}, nil); w.Code != http.StatusCreated {
+		t.Fatalf("signup = %d %s", w.Code, w.Body)
+	}
+	session := sessionCookie(t, post(handler, "/login", url.Values{
+		"username": {"nopkuser"}, "password": {"password123"},
+	}, nil))
+	home := get(handler, "/", session)
+	if home.Code != http.StatusOK || strings.Contains(home.Body.String(), `href="/passkeys"`) {
+		t.Fatalf("home should omit Passkeys nav when WebAuthn is off: %d %s", home.Code, home.Body)
+	}
+}
+
 func TestPasskeyHTTPRegisterBeginAndLoginChallenge(t *testing.T) {
 	database := testdb.Open(t)
 	service, err := auth.NewService(database)

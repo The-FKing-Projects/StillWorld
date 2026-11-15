@@ -54,6 +54,11 @@ type SecondFactorInfo struct {
 	Passkey bool
 }
 
+// WebAuthnConfigured reports whether SetWebAuthn installed a usable RP.
+func (s *Service) WebAuthnConfigured() bool {
+	return s != nil && s.wa != nil
+}
+
 // SetWebAuthn configures the Relying Party used for optional passkeys.
 // A nil config disables enrolment and passkey login completion.
 func (s *Service) SetWebAuthn(cfg *WebAuthnConfig) error {

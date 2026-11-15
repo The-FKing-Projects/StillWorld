@@ -23,7 +23,10 @@ func webAuthnFromLookup(lookup func(string) (string, bool)) (*auth.WebAuthnConfi
 	rpID, hasID := lookup("STILLWORLD_WEBAUTHN_RP_ID")
 	origins, hasOrigins := lookup("STILLWORLD_WEBAUTHN_RP_ORIGINS")
 	display, hasDisplay := lookup("STILLWORLD_WEBAUTHN_RP_DISPLAY_NAME")
-	if (!hasID || rpID == "") && (!hasOrigins || origins == "") && (!hasDisplay || display == "") {
+	// Presence of any variable (even empty) means WebAuthn is intentionally
+	// configured; require valid trimmed RP ID and origins rather than silently
+	// disabling passkeys.
+	if !hasID && !hasOrigins && !hasDisplay {
 		return nil, nil
 	}
 	rpID = strings.TrimSpace(rpID)
