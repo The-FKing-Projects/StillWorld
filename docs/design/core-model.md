@@ -65,6 +65,17 @@ Status: draft. These are design decisions, not a finished specification.
   [deployment](../deployment.md#optional-passkeys-webauthn)). Not
   production-ready.
 
+- **Downstream games own the deployable binary.** Operators choose a game by
+  building and running that game's executable (for private/staging, Relay; see
+  [deployment](../deployment.md)). `cmd/stillworld` remains auth and operator
+  tooling only and does not register a game. There is no multi-game host and no
+  runtime plugin switch.
+- **Turns policy is game-owned Go configuration.** Each game sets
+  `stillworld.Options.Turns` (`Cap`, `Interval`) in its `main` when calling
+  `stillworld.New`. There are no deployment environment variables for Turns
+  mechanics; see [Turns API](turns.md) and
+  [Neutral framework boundary](neutral-framework.md).
+
 ## Still open
 
 - Password recovery and email verification use bounded admission (in memory by
@@ -75,8 +86,6 @@ Status: draft. These are design decisions, not a finished specification.
   remediations landed (PR #45); concurrent password-hash, action, and delivery
   slots remain per-process by design for single-VPS staging—revisit only if
   multi-server production is planned. Not production-ready.
-- Main-executable configuration for choosing a downstream game and its Turns
-  policy; the public composition API already accepts these settings.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup
   locking, and the action locking, retry, and duplicate-request implementation.
 - Extend the initial HTML forms and result presentation as games need richer

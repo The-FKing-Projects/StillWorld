@@ -2,11 +2,12 @@
 
 Status: initial implementation contract. The public `action` contract, an
 initial PostgreSQL action engine, JSON HTTP adapter, app-composition API, and
-coordinated game migration runner exist, but no game is configured by the main
-executable. The separate-module counter and relay examples demonstrate the public API.
-These decisions are not yet a stable API. Internal Turns arithmetic is implemented
-separately; see [Turns API](turns.md). Relay demonstrates the initial
-server-rendered text interface described below.
+coordinated game migration runner exist. `cmd/stillworld` is auth and operator
+tooling only and does not register a game; each downstream game owns its
+deployable executable. The separate-module counter and relay examples
+demonstrate the public API. These decisions are not yet a stable API. Internal
+Turns arithmetic is implemented separately; see [Turns API](turns.md). Relay
+demonstrates the initial server-rendered text interface described below.
 
 ## Shared foundation
 
@@ -19,8 +20,10 @@ transaction.
 All games use that action model. A game defines its own actions, their costs,
 entities, and effects; it does not replace or bypass the shared Turns and
 transaction model. Each game configures its own Turns regeneration rate and
-maximum balance. The internal policy is specified in [Turns API](turns.md);
-the game integration configuration format is not yet decided.
+maximum balance by passing `stillworld.Options.Turns` (`Cap`, `Interval`) from
+its `main` into `stillworld.New`. The internal policy is specified in
+[Turns API](turns.md). There is no multi-game host and no deployment
+environment variables for Turns mechanics.
 
 ## Game-owned rules and data
 
