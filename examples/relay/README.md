@@ -10,6 +10,10 @@ The server-rendered interface works without JavaScript, and a JSON API remains
 available for clients. The game uses only public StillWorld packages; it does
 not import any `internal` package.
 
+For a private single-VPS staging layout (systemd, Nginx, TLS), see the
+[deployment guide](../../docs/deployment.md). That guide installs this Relay
+binary; Counter is not a remote staging target.
+
 ## Run locally
 
 From this directory, configure a disposable PostgreSQL database and a private

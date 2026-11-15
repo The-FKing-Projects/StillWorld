@@ -41,8 +41,10 @@ rightmost `X-Forwarded-For` value. The proxy must also preserve the public
 `X-Forwarded-Host`.
 
 For a private or staging single-VPS setup, see the
-[deployment guide](docs/deployment.md). It documents the current operational
-limits and does not change the project's public-deployment readiness status.
+[deployment guide](docs/deployment.md). That guide deploys the **Relay**
+example as the game-owning executable (not `cmd/stillworld`, which is auth and
+operator tooling only). It documents the current operational limits and does
+not change the project's public-deployment readiness status.
 
 ## Clean-room development
 
