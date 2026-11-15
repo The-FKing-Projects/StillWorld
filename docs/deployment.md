@@ -80,17 +80,20 @@ STILLWORLD_TOTP_KEY=HEX_32_BYTE_KEY
 ```
 
 `STILLWORLD_TOTP_KEY_ID` defaults to `v1` when omitted. The key may also be
-standard or URL-safe base64 of 32 bytes. Store `key_id` with each encrypted
-seed so you can rotate later. For decryption during rotation, keep prior keys
-in `STILLWORLD_TOTP_KEYS` as `oldid=material,other=material` while
-`STILLWORLD_TOTP_KEY` / `STILLWORLD_TOTP_KEY_ID` name the active encryption key.
-Successful TOTP logins re-encrypt seeds under the active key. Without these
+standard or URL-safe base64 of 32 bytes (padded or unpadded). Store `key_id`
+with each encrypted seed so you can rotate later. For decryption during
+rotation, keep prior keys in `STILLWORLD_TOTP_KEYS` as
+`oldid=material,other=material` while `STILLWORLD_TOTP_KEY` /
+`STILLWORLD_TOTP_KEY_ID` name the active encryption key. Successful TOTP
+logins re-encrypt seeds under the active key. Password-hash upgrades for
+TOTP-enabled accounts run on the password step (while creating the login
+challenge), using the same helpers as a normal session login. Without these
 settings, accounts without TOTP continue to work; accounts that already have
 TOTP cannot complete login until a valid key ring is configured. Protect the
 TOTP key like the database credential and keep it out of database dumps.
 Authenticator recovery codes are stored hashed; the TOTP seed itself is stored
-encrypted. This is a private/staging control, not a public-deployment
-clearance.
+encrypted. Enrolment confirmation codes share the login IP rate limit. This is
+a private/staging control, not a public-deployment clearance.
 
 Build the binary from a reviewed source revision on a trusted build host, then
 transfer it to the server through a trusted channel:

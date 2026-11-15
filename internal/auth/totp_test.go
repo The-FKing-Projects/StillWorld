@@ -178,3 +178,44 @@ func TestTOTPUnavailableWithoutKeys(t *testing.T) {
 		t.Fatalf("begin: %v", err)
 	}
 }
+
+func TestTOTPLoginRehashesWeakPassword(t *testing.T) {
+	s, now := newTestService(t)
+	s.SetTOTPKeys(testTOTPRing(t))
+	ctx := context.Background()
+	name, id := register(t, s, "")
+	enrol, err := s.BeginTOTPEnrolment(ctx, id, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(enrol.Secret)
+	if _, err := s.ConfirmTOTPEnrolment(ctx, id, totpCode(raw, currentTOTPStep(*now))); err != nil {
+		t.Fatal(err)
+	}
+	// Raise service targets after enrolment so the next password step upgrades.
+	s.params = Params{MemoryKiB: 16, Iterations: 2, Parallelism: 2}
+	var before string
+	if err := s.DB.QueryRow(`SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	if !NeedsRehash(before, s.params) {
+		t.Fatal("expected stored hash to need rehash")
+	}
+	_, err = s.Login(ctx, name, "password123")
+	var challenge *ChallengeError
+	if !errors.As(err, &challenge) {
+		t.Fatalf("challenge: %v", err)
+	}
+	var afterChallenge string
+	if err := s.DB.QueryRow(`SELECT password_hash FROM accounts WHERE id = $1`, id).Scan(&afterChallenge); err != nil {
+		t.Fatal(err)
+	}
+	if NeedsRehash(afterChallenge, s.params) {
+		t.Fatalf("password step did not rehash: %s", afterChallenge)
+	}
+	*now = now.Add(totpPeriod * time.Second)
+	token, err := s.CompleteLoginTOTP(ctx, challenge.Token, totpCode(raw, currentTOTPStep(*now)))
+	if err != nil || token == "" {
+		t.Fatalf("complete: %q %v", token, err)
+	}
+}

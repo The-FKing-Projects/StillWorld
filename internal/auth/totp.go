@@ -220,10 +220,15 @@ func (s *Service) completeChallenge(ctx context.Context, challengeToken string, 
 	if err != nil {
 		return "", fmt.Errorf("begin totp login: %w", err)
 	}
+	challengeHash := hashToken(challengeToken)
+	now := s.Now()
+	// Resolve the account without locking the challenge first so lock order
+	// matches createLoginChallengeLocked / DisableTOTP / password reset:
+	// accounts, then login_challenges.
 	var accountID int64
 	err = tx.QueryRowContext(ctx, `SELECT account_id FROM login_challenges
-		WHERE token_hash = $1 AND expires_at > $2 FOR UPDATE`,
-		hashToken(challengeToken), s.Now()).Scan(&accountID)
+		WHERE token_hash = $1 AND expires_at > $2`,
+		challengeHash, now).Scan(&accountID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", rollbackAuth(tx, ErrTOTPChallenge)
 	}
@@ -239,23 +244,33 @@ func (s *Service) completeChallenge(ctx context.Context, challengeToken string, 
 	if err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("lock account for totp login: %w", err))
 	}
+	// Refresh after the account lock so expiry is not evaluated with a stale
+	// clock from before waiting on a long-held account row.
+	now = s.Now()
+	var lockedAccountID int64
+	err = tx.QueryRowContext(ctx, `SELECT account_id FROM login_challenges
+		WHERE token_hash = $1 AND expires_at > $2 FOR UPDATE`,
+		challengeHash, now).Scan(&lockedAccountID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", rollbackAuth(tx, ErrTOTPChallenge)
+	}
+	if err != nil {
+		return "", rollbackAuth(tx, fmt.Errorf("lock login challenge: %w", err))
+	}
+	if lockedAccountID != accountID {
+		return "", rollbackAuth(tx, ErrTOTPChallenge)
+	}
 	if err := verify(tx, accountID); err != nil {
 		return "", rollbackAuth(tx, err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE token_hash = $1`, hashToken(challengeToken)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM login_challenges WHERE token_hash = $1`, challengeHash); err != nil {
 		return "", rollbackAuth(tx, fmt.Errorf("consume login challenge: %w", err))
 	}
-	token, err := newToken()
+	// Password rehash already ran on the challenge-creation path (plaintext is
+	// not available here). Session insert shares createSession's helper.
+	token, err := s.insertSessionTx(ctx, tx, accountID)
 	if err != nil {
 		return "", rollbackAuth(tx, err)
-	}
-	now := s.Now()
-	_, err = tx.ExecContext(ctx, `INSERT INTO sessions
-		(token_hash, account_id, created_at, last_seen_at, expires_at)
-		VALUES ($1, $2, $3, $3, $4)`,
-		hashToken(token), accountID, now, now.Add(IdleTimeout))
-	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("insert session after totp: %w", err))
 	}
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("commit totp login: %w", err)
@@ -337,30 +352,20 @@ func (s *Service) consumeRecoveryCode(ctx context.Context, tx *sql.Tx, accountID
 	return nil
 }
 
-// createLoginChallengeLocked re-checks the password under a row lock, then
-// stores a short-lived challenge. Concurrent resets reject the login.
+// createLoginChallengeLocked locks the account (before any challenge row),
+// re-checks the password, upgrades weaker hashes, then stores a short-lived
+// challenge. Concurrent resets reject the login.
 func (s *Service) createLoginChallengeLocked(ctx context.Context, accountID int64, verifiedHash, password string) (string, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", fmt.Errorf("begin login challenge: %w", err)
 	}
-	var currentHash string
-	err = tx.QueryRowContext(ctx,
-		`SELECT password_hash FROM accounts WHERE id = $1 AND disabled_at IS NULL FOR UPDATE`, accountID).Scan(&currentHash)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", rollbackAuth(tx, ErrInvalidCredentials)
-	}
+	currentHash, err := s.lockAccountPassword(ctx, tx, accountID)
 	if err != nil {
-		return "", rollbackAuth(tx, fmt.Errorf("lock account for challenge: %w", err))
+		return "", rollbackAuth(tx, err)
 	}
-	if currentHash != verifiedHash {
-		ok, verr := VerifyPassword(password, currentHash)
-		if verr != nil {
-			return "", rollbackAuth(tx, fmt.Errorf("verify current password hash: %w", verr))
-		}
-		if !ok {
-			return "", rollbackAuth(tx, ErrInvalidCredentials)
-		}
+	if err := s.ensurePasswordAndRehash(ctx, tx, accountID, currentHash, verifiedHash, password); err != nil {
+		return "", rollbackAuth(tx, err)
 	}
 	var enabled bool
 	err = tx.QueryRowContext(ctx, `SELECT EXISTS(
