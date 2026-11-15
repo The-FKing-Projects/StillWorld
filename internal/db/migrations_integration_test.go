@@ -2,15 +2,20 @@ package db_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/The-FKing-Projects/StillWorld/internal/db"
 	"github.com/The-FKing-Projects/StillWorld/internal/testdb"
 	"github.com/pressly/goose/v3"
 )
+
+// migrationAdvisoryLockID matches internal/db.migrationLockID (0x5354494c4c574f52).
+const migrationAdvisoryLockID = int64(0x5354494c4c574f52)
 
 func TestAccountDisablingMigrationUpgradeAndGuardedDowngrade(t *testing.T) {
 	ctx := context.Background()
@@ -122,4 +127,139 @@ func TestReadinessRejectsDifferentMigrationHistory(t *testing.T) {
 	if err := db.CheckGameDeploymentReady(ctx, d, "counter", replaced); !errors.Is(err, db.ErrMigrationsNotReady) {
 		t.Fatalf("readiness error = %v, want %v", err, db.ErrMigrationsNotReady)
 	}
+}
+
+func TestConcurrentMigratorWaitsOnAdvisoryLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	d := testdb.Open(t)
+	migrations := fstest.MapFS{
+		"00001_counter.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
+CREATE TABLE game_lock_probe (id BIGINT PRIMARY KEY);
+-- +goose Down
+DROP TABLE game_lock_probe;
+`)},
+	}
+
+	conn, err := d.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_try_advisory_lock($1)`, migrationAdvisoryLockID).Scan(&acquired); err != nil {
+		t.Fatal(err)
+	}
+	if !acquired {
+		t.Fatal("could not acquire migration advisory lock for contention test")
+	}
+	defer func() {
+		var unlocked bool
+		_ = conn.QueryRowContext(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked)
+	}()
+
+	attempted := make(chan struct{}, 1)
+	db.SetMigrationLockAttemptHookForTest(func() {
+		select {
+		case attempted <- struct{}{}:
+		default:
+		}
+	})
+	t.Cleanup(func() { db.SetMigrationLockAttemptHookForTest(nil) })
+
+	done := make(chan error, 1)
+	go func() {
+		done <- db.MigrateGameDeployment(ctx, d, "counter", migrations)
+	}()
+	waitForLockAcquisitionAttempt(t, ctx, attempted, done)
+
+	var unlocked bool
+	if err := conn.QueryRowContext(ctx, `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockID).Scan(&unlocked); err != nil || !unlocked {
+		t.Fatalf("release held lock: unlocked=%v err=%v", unlocked, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("waiting migrator after lock release: %v", err)
+	}
+	if err := db.CheckGameDeploymentReady(ctx, d, "counter", migrations); err != nil {
+		t.Fatalf("readiness after migrate: %v", err)
+	}
+	if held := advisoryLockHeld(t, d); held {
+		t.Fatal("migration advisory lock still held after successful migrate")
+	}
+}
+
+func TestGameMigrationFailureRetainsFrameworkAndRefusesServing(t *testing.T) {
+	ctx := context.Background()
+	d := testdb.Open(t)
+	failing := fstest.MapFS{
+		"00001_fail.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
+SELECT 1/0;
+-- +goose Down
+SELECT 1;
+`)},
+	}
+	if err := db.MigrateGameDeployment(ctx, d, "counter", failing); err == nil {
+		t.Fatal("expected game migration failure")
+	}
+
+	var accountsTable string
+	if err := d.QueryRowContext(ctx, `SELECT to_regclass('accounts')::text`).Scan(&accountsTable); err != nil || accountsTable == "" {
+		t.Fatalf("framework tables missing after game failure: %q %v", accountsTable, err)
+	}
+	var gameApplied int
+	if err := d.QueryRowContext(ctx,
+		`SELECT count(*) FROM game_goose_db_version WHERE version_id > 0 AND is_applied`).Scan(&gameApplied); err != nil {
+		t.Fatalf("read game history after failure: %v", err)
+	}
+	if gameApplied != 0 {
+		t.Fatalf("failed game migration left %d applied versions", gameApplied)
+	}
+	if err := db.CheckGameDeploymentReady(ctx, d, "counter", failing); !errors.Is(err, db.ErrMigrationsNotReady) {
+		t.Fatalf("readiness after failed game migrate = %v, want %v", err, db.ErrMigrationsNotReady)
+	}
+
+	fixed := fstest.MapFS{
+		"00001_counter.sql": &fstest.MapFile{Data: []byte(`-- +goose Up
+CREATE TABLE game_after_failure (id BIGINT PRIMARY KEY);
+-- +goose Down
+DROP TABLE game_after_failure;
+`)},
+	}
+	if err := db.MigrateGameDeployment(ctx, d, "counter", fixed); err != nil {
+		t.Fatalf("recover with fixed game migrations: %v", err)
+	}
+	if err := db.CheckGameDeploymentReady(ctx, d, "counter", fixed); err != nil {
+		t.Fatalf("readiness after recovery: %v", err)
+	}
+}
+
+func waitForLockAcquisitionAttempt(t *testing.T, ctx context.Context, attempted <-chan struct{}, result <-chan error) {
+	t.Helper()
+	select {
+	case <-attempted:
+		return
+	case err := <-result:
+		t.Fatalf("migrator finished before a lock-acquisition attempt: %v", err)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for migration lock-acquisition attempt")
+	}
+}
+
+func advisoryLockHeld(t *testing.T, d *sql.DB) bool {
+	t.Helper()
+	// pg_advisory_lock(bigint) appears as two int4 keys in pg_locks.
+	high := int64(uint64(migrationAdvisoryLockID) >> 32)
+	low := int64(uint64(migrationAdvisoryLockID) & 0xffffffff)
+	var held bool
+	if err := d.QueryRowContext(context.Background(),
+		`SELECT EXISTS (
+			SELECT 1 FROM pg_locks
+			 WHERE locktype = 'advisory'
+			   AND classid = $1::oid
+			   AND objid = $2::oid
+			   AND granted
+		)`, high, low).Scan(&held); err != nil {
+		t.Fatal(err)
+	}
+	return held
 }

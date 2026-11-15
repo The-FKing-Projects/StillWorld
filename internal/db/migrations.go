@@ -348,6 +348,17 @@ func releaseMigrationLock(conn *sql.Conn) error {
 	return nil
 }
 
+// migrationLockAttemptHook, when non-nil, is invoked after each failed
+// pg_try_advisory_lock during acquireMigrationLock. Tests use it to observe
+// that a waiter has reached the lock loop before releasing a held lock.
+var migrationLockAttemptHook func()
+
+// SetMigrationLockAttemptHookForTest installs a hook observed after each failed
+// migration advisory-lock try. Pass nil to clear. For tests only.
+func SetMigrationLockAttemptHookForTest(hook func()) {
+	migrationLockAttemptHook = hook
+}
+
 func acquireMigrationLock(ctx context.Context, conn *sql.Conn) (bool, error) {
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
@@ -360,6 +371,9 @@ func acquireMigrationLock(ctx context.Context, conn *sql.Conn) (bool, error) {
 		}
 		if acquired {
 			return true, nil
+		}
+		if hook := migrationLockAttemptHook; hook != nil {
+			hook()
 		}
 		select {
 		case <-ctx.Done():
