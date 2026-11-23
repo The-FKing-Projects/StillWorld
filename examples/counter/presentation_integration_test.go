@@ -64,7 +64,8 @@ func TestCounterHTMLActionWithIntegerInput(t *testing.T) {
 
 	response, body := counterRequest(t, client, http.MethodGet, server.URL+"/", "", "")
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Current value: 0") ||
-		!strings.Contains(body, `name="amount" type="number" value="1" min="1" max="100"`) {
+		!strings.Contains(body, `name="amount" type="number" value="1" min="1" max="100"`) ||
+		!strings.Contains(body, "<strong>Cost:</strong> 1 Turn") {
 		t.Fatalf("counter page = %d: %s", response.StatusCode, body)
 	}
 	tokenPattern := regexp.MustCompile(`name="request_id" value="([^"]+)"`)
@@ -79,7 +80,7 @@ func TestCounterHTMLActionWithIntegerInput(t *testing.T) {
 		t.Fatalf("submit = %d %q: %s", response.StatusCode, resultURL, body)
 	}
 	response, body = counterRequest(t, client, http.MethodGet, server.URL+resultURL, "", "")
-	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Your counter is now 3.") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Succeeded. Your counter is now 3.") {
 		t.Fatalf("result = %d: %s", response.StatusCode, body)
 	}
 	response, body = counterRequest(t, client, http.MethodPost, server.URL+"/actions/counter.increment", form.Encode(), server.URL)

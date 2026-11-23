@@ -17,7 +17,7 @@ type testPresentation struct{}
 
 func (testPresentation) Home(context.Context, action.Player) (presentation.Page, error) {
 	return presentation.Page{Title: "<Game>", Forms: []presentation.Form{{
-		Action: "test.run", Label: "Run",
+		Action: "test.run", Label: "Run", Cost: presentation.CostOf(2),
 		Numbers: []presentation.NumberField{{Name: "amount", Label: "Amount", Value: 1, Min: 1, Max: 100}},
 	}}}, nil
 }
@@ -63,10 +63,62 @@ func TestHTMLHomeEscapesGameContent(t *testing.T) {
 		strings.Contains(response.Body.String(), "<Game>") {
 		t.Fatalf("home = %d %s", response.Code, response.Body)
 	}
-	for _, expected := range []string{`<label for="test.run-amount">Amount</label>`, `name="amount" type="number" value="1" min="1" max="100" step="1" required`} {
-		if !strings.Contains(response.Body.String(), expected) {
-			t.Errorf("missing numeric input %q: %s", expected, response.Body)
+	body := response.Body.String()
+	for _, expected := range []string{
+		`<label for="test.run-amount">Amount</label>`,
+		`name="amount" type="number" value="1" min="1" max="100" step="1" required`,
+		`<strong>Cost:</strong> 2 Turns`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Errorf("missing %q: %s", expected, body)
 		}
+	}
+}
+
+func TestHTMLResultPrefixesOutcomeStatus(t *testing.T) {
+	authenticator := newFakeAuth()
+	authenticator.sessions["session-token"] = "player"
+	cookie := &http.Cookie{Name: "__Host-session", Value: "session-token"}
+
+	success := &fakeActionService{
+		resultName: "test.run",
+		resultOutcome: actionengine.Outcome{
+			Version: 1, Status: "success", Result: json.RawMessage(`{}`),
+		},
+	}
+	handler := New(authenticator, Options{Actions: success, Presentation: testPresentation{}}).Handler()
+	response := get(handler, "/actions/results/"+strings.Repeat("a", 32), cookie)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Succeeded. &lt;result&gt;") {
+		t.Fatalf("success result = %d %s", response.Code, response.Body)
+	}
+
+	rejected := &fakeActionService{
+		resultName: "test.run",
+		resultOutcome: actionengine.Outcome{
+			Version: 1, Status: "rejected",
+			Rejection: &action.Rejection{Code: "test.denied", Message: "Not allowed."},
+		},
+	}
+	handler = New(authenticator, Options{Actions: rejected, Presentation: testPresentation{}}).Handler()
+	response = get(handler, "/actions/results/"+strings.Repeat("b", 32), cookie)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Rejected. Not allowed.") {
+		t.Fatalf("rejected result = %d %s", response.Code, response.Body)
+	}
+}
+
+func TestInvalidDisplayCostsAreRejected(t *testing.T) {
+	negative := int64(-1)
+	if err := validatePageForms([]presentation.Form{{Action: "test.run", Cost: &negative}}); err == nil {
+		t.Fatal("accepted negative display cost")
+	}
+	if got := formCostLabel(nil); got != "" {
+		t.Fatalf("nil cost label = %q", got)
+	}
+	if got := formCostLabel(presentation.CostOf(0)); got != "0 Turns" {
+		t.Fatalf("zero cost label = %q", got)
+	}
+	if got := formCostLabel(presentation.CostOf(1)); got != "1 Turn" {
+		t.Fatalf("one cost label = %q", got)
 	}
 }
 

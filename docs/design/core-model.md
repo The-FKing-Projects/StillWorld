@@ -88,6 +88,6 @@ Status: draft. These are design decisions, not a finished specification.
   multi-server production is planned. Not production-ready.
 - Maintain PostgreSQL-backed coverage of migration coordination, cleanup
   locking, and the action locking, retry, and duplicate-request implementation.
-- Extend the initial HTML forms and result presentation as games need richer
-  inputs and views; the Relay example demonstrates the shared HTML and JSON
-  action pipeline.
+- Further HTML form field types and game-owned templates remain future work
+  when a downstream game needs them; Relay and Counter already use the shared
+  HTML/JSON action pipeline with display Turn costs and prefixed result status.

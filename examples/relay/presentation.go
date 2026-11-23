@@ -51,8 +51,8 @@ func (p relayPresentation) Home(ctx context.Context, player action.Player) (pres
 		return page, nil
 	}
 	page.Forms = []presentation.Form{
-		{Action: "relay.salvage", Label: "Collect a component", Description: "Spend 1 Turn to collect one component. Your pack holds up to five."},
-		{Action: "relay.repair", Label: "Repair the active station", Description: "Spend 2 Turns and 2 components to make one repair."},
+		{Action: "relay.salvage", Label: "Collect a component", Description: "Collect one component. Your pack holds up to five.", Cost: presentation.CostOf(1)},
+		{Action: "relay.repair", Label: "Repair the active station", Description: "Spend 2 components to make one repair.", Cost: presentation.CostOf(2)},
 	}
 	return page, nil
 }

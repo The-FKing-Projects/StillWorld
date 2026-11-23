@@ -31,6 +31,7 @@ type turnsReader interface {
 type htmlForm struct {
 	presentation.Form
 	RequestID string
+	CostLabel string
 }
 
 type htmlPage struct {
@@ -150,7 +151,7 @@ button:hover{background:#0d3d35} :focus-visible{outline:3px solid #d77b00;outlin
 {{end}}
 {{range .Sections}}<section><h2>{{.Heading}}</h2><ul>{{range .Lines}}<li>{{.}}</li>{{end}}</ul></section>{{end}}
 {{if .Forms}}<section><h2>Actions</h2><div class="actions">{{range .Forms}}{{$action := .Action}}<form method="post" action="/actions/{{.Action}}">
-<input type="hidden" name="request_id" value="{{.RequestID}}"><p>{{.Description}}</p>{{range .Numbers}}
+<input type="hidden" name="request_id" value="{{.RequestID}}"><p>{{.Description}}</p>{{if .CostLabel}}<p><strong>Cost:</strong> {{.CostLabel}}</p>{{end}}{{range .Numbers}}
 <label for="{{$action}}-{{.Name}}">{{.Label}}</label><input id="{{$action}}-{{.Name}}" name="{{.Name}}" type="number" value="{{.Value}}" min="{{.Min}}" max="{{.Max}}" step="1" required>{{end}}
 <p><button type="submit">{{.Label}}</button></p></form>{{end}}</div></section>{{end}}
 {{if .RetryAction}}<form method="post" action="/actions/{{.RetryAction}}">{{range $name,$values := .RetryFields}}{{range $values}}<input type="hidden" name="{{$name}}" value="{{.}}">{{end}}{{end}}
@@ -182,6 +183,9 @@ func validatePageForms(forms []presentation.Form) error {
 			return fmt.Errorf("duplicate form for action %q", form.Action)
 		}
 		actions[form.Action] = true
+		if form.Cost != nil && *form.Cost < 0 {
+			return fmt.Errorf("negative display cost for action %q", form.Action)
+		}
 		fields := make(map[string]bool, len(form.Numbers))
 		for _, field := range form.Numbers {
 			if !formFieldName.MatchString(field.Name) || field.Name == "request_id" ||
@@ -193,6 +197,16 @@ func validatePageForms(forms []presentation.Form) error {
 		}
 	}
 	return nil
+}
+
+func formCostLabel(cost *int64) string {
+	if cost == nil {
+		return ""
+	}
+	if *cost == 1 {
+		return "1 Turn"
+	}
+	return fmt.Sprintf("%d Turns", *cost)
 }
 
 func renderHTML(w http.ResponseWriter, status int, page htmlPage) {
@@ -339,7 +353,9 @@ func (s *Server) handleHTMLHome(w http.ResponseWriter, r *http.Request) {
 			renderHTML(w, http.StatusServiceUnavailable, htmlPage{Title: "Temporarily unavailable", Message: "Actions could not be prepared. Try again."})
 			return
 		}
-		data.Forms = append(data.Forms, htmlForm{Form: form, RequestID: token.Token})
+		data.Forms = append(data.Forms, htmlForm{
+			Form: form, RequestID: token.Token, CostLabel: formCostLabel(form.Cost),
+		})
 	}
 	renderHTML(w, http.StatusOK, data)
 }
@@ -462,7 +478,7 @@ func (s *Server) handleHTMLResult(w http.ResponseWriter, r *http.Request) {
 	}
 	message := ""
 	if outcome.Status == "rejected" && outcome.Rejection != nil {
-		message = outcome.Rejection.Message
+		message = "Rejected. " + outcome.Rejection.Message
 	} else {
 		message, err = s.opts.Presentation.Result(name, outcome.Result)
 		if err != nil {
@@ -470,6 +486,7 @@ func (s *Server) handleHTMLResult(w http.ResponseWriter, r *http.Request) {
 			renderHTML(w, http.StatusServiceUnavailable, htmlPage{Title: "Temporarily unavailable", Message: "The action result could not be displayed. Try again."})
 			return
 		}
+		message = "Succeeded. " + message
 	}
 	renderHTML(w, http.StatusOK, htmlPage{Title: "Action result", Username: account.Username, Message: message})
 }

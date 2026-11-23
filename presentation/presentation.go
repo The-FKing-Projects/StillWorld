@@ -14,7 +14,16 @@ type Form struct {
 	Action      string
 	Label       string
 	Description string
-	Numbers     []NumberField
+	// Cost is an optional display hint for the action's Turns cost. Nil omits
+	// the cost line; a non-nil value (including zero) is shown before the
+	// button. The action engine's Prepared.Cost remains authoritative.
+	Cost    *int64
+	Numbers []NumberField
+}
+
+// CostOf returns a pointer to n for Form.Cost display.
+func CostOf(n int64) *int64 {
+	return &n
 }
 
 // NumberField describes an integer input. Bounds are browser hints; games must
