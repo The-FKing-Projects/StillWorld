@@ -59,7 +59,9 @@ func TestHTMLGameFlow(t *testing.T) {
 	}
 	response, body = htmlRequest(t, client, http.MethodGet, server.URL+"/", "", "")
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "North Shoal") ||
-		!strings.Contains(body, "html_player") || !strings.Contains(body, "Available Turns:</strong> 20") {
+		!strings.Contains(body, "html_player") || !strings.Contains(body, "Available Turns:</strong> 20") ||
+		!strings.Contains(body, "<strong>Cost:</strong> 1 Turn") ||
+		!strings.Contains(body, "<strong>Cost:</strong> 2 Turns") {
 		t.Fatalf("game home = %d %s", response.StatusCode, body)
 	}
 	expression := regexp.MustCompile(`action="/actions/relay\.salvage">\s*<input type="hidden" name="request_id" value="([^"]+)"`)
@@ -84,7 +86,7 @@ func TestHTMLGameFlow(t *testing.T) {
 		t.Fatalf("submit = %d %q %s", response.StatusCode, resultURL, body)
 	}
 	response, body = htmlRequest(t, client, http.MethodGet, server.URL+resultURL, "", "")
-	if response.StatusCode != http.StatusOK || !strings.Contains(body, "pack now has 1 of 5") {
+	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Succeeded. You collected a component. Your pack now has 1 of 5.") {
 		t.Fatalf("result = %d %s", response.StatusCode, body)
 	}
 	repairExpression := regexp.MustCompile(`action="/actions/relay\.repair">\s*<input type="hidden" name="request_id" value="([^"]+)"`)
@@ -116,7 +118,8 @@ func TestHTMLGameFlow(t *testing.T) {
 		t.Fatalf("rejected action redirect = %d %q %s", response.StatusCode, rejectionURL, body)
 	}
 	response, body = htmlRequest(t, client, http.MethodGet, server.URL+rejectionURL, "", "")
-	if response.StatusCode != http.StatusOK || !strings.Contains(body, "Collect two spare components") {
+	if response.StatusCode != http.StatusOK ||
+		!strings.Contains(body, "Rejected. Collect two spare components") {
 		t.Fatalf("saved rejection = %d %s", response.StatusCode, body)
 	}
 	other := newPlayer(t, server.URL, "other_player")

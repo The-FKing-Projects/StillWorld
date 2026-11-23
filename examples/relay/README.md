@@ -38,9 +38,10 @@ one every 30 minutes. Salvaging costs one Turn and adds one component to the
 player's pack, up to five. Repairing costs two Turns and two components, and
 advances the shared active station by one step.
 
-The HTML forms use the same authenticated action pipeline as the API. A
-completed submission redirects to a player-scoped saved result. If the
-outcome is uncertain, use the retry button to resend the original request;
+The HTML forms use the same authenticated action pipeline as the API. Each
+action shows its Turn cost before the button. A completed submission redirects
+to a player-scoped saved result prefixed with `Succeeded.` or `Rejected.`. If
+the outcome is uncertain, use the retry button to resend the original request;
 do not start a new action until its outcome is understood.
 
 ## API loop

@@ -579,8 +579,10 @@ screens and low-bandwidth connections. Render action results with normal
 fragments.
 
 The initial implementation uses a shared framework HTML shell; a game
-supplies its page text, action descriptions, form decoding, and result text
-through the public `presentation` package. Relay uses actions without
+supplies its page text, action descriptions, optional display Turn costs,
+form decoding, and result text through the public `presentation` package.
+`Form.Cost` is display-only (`nil` omits the cost line); the action engine's
+`Prepared.Cost` remains authoritative. Relay uses actions without
 game-specific fields; the counter example demonstrates an integer input.
 Additional form controls and game-owned templates are not yet supported.
 
@@ -639,8 +641,9 @@ For HTML submissions, a committed success or rejection redirects with 303 to
 `/actions/results/{nonce}`. The result route authenticates the current player
 and looks up the outcome by that player and nonce; the nonce is not a
 credential. Do not put the full signed token in a URL. The result page presents
-the stored result or safe rejection message, not current game state rendered
-as though it were the original outcome.
+the stored result or safe rejection message, prefixed with `Succeeded.` or
+`Rejected.`, not current game state rendered as though it were the original
+outcome.
 
 A confirmed technical rollback returns a safe retryable error with a
 correlation ID. An uncertain commit returns a distinct safe
@@ -712,8 +715,9 @@ Implementation does not imply a stable API or a production-ready game.
   semantics. The initial public app configuration accepts the game's policy.
 - The initial HTML and JSON interfaces use the same action engine, persisted
   outcomes, authentication, and admission controls. Relay demonstrates
-  server-rendered forms; the counter example demonstrates integer input.
-  Additional form fields and presentation remain future work.
+  server-rendered forms with display Turn costs; the counter example
+  demonstrates integer input. Additional form field types and game-owned
+  templates remain future work when a downstream game needs them.
 - Deployment guidance (#22) is documented. Authentication and rate-limit
   remediations from #23 landed (PR #45): optional shared PostgreSQL-backed
   auth and action IP/player limits, deferred verified signup, IP-only login

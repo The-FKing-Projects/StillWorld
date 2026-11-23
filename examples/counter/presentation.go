@@ -34,7 +34,8 @@ func (p counterPresentation) Home(ctx context.Context, player action.Player) (pr
 		Forms: []presentation.Form{{
 			Action:      "counter.increment",
 			Label:       "Increase counter",
-			Description: "Each increment costs one Turn.",
+			Description: "Increase your counter by the chosen amount. Each unit costs one Turn.",
+			Cost:        presentation.CostOf(1),
 			Numbers: []presentation.NumberField{
 				{Name: "amount", Label: "Amount", Value: 1, Min: 1, Max: 100},
 			},

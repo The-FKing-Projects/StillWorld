@@ -67,6 +67,9 @@ type fakeActionService struct {
 	issueErr        error
 	outcome         actionengine.Outcome
 	executeErr      error
+	resultName      string
+	resultOutcome   actionengine.Outcome
+	resultErr       error
 	issuedAccount   int64
 	issuedName      string
 	executedAccount int64
@@ -91,6 +94,10 @@ func (f *fakeActionService) Execute(_ context.Context, accountID int64, actionNa
 	f.executedToken = token
 	f.executedInput = append([]byte(nil), input...)
 	return f.outcome, f.executeErr
+}
+
+func (f *fakeActionService) Result(_ context.Context, _ int64, _ string) (string, actionengine.Outcome, error) {
+	return f.resultName, f.resultOutcome, f.resultErr
 }
 
 func post(h http.Handler, path string, form url.Values, mutate func(*http.Request)) *httptest.ResponseRecorder {

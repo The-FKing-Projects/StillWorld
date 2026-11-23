@@ -20,8 +20,10 @@ deployments should terminate TLS and configure secure cookies at the app layer.
 Migrations are explicit; serving checks schema readiness and will not migrate
 automatically.
 Open `http://127.0.0.1:8081/` for the server-rendered example. Its amount field
-is decoded into the same integer JSON input used by the action API. The game
-validates submitted fields and the action validates its input again.
+is decoded into the same integer JSON input used by the action API. The form
+shows a display Turn cost; the game validates submitted fields and the action
+validates its input again. Saved results are prefixed with `Succeeded.` or
+`Rejected.`.
 
 Run the module's compile-time and focused action tests with `go test ./...`
 from this directory. The request signing key must remain stable until every

@@ -8,6 +8,9 @@ text and actions. It is intended as an integration example, not a game brand.
 - Use semantic headings, labels, lists, and ordinary forms. Provide visible
   keyboard focus and status text that does not depend on color.
 - Show the player's current Turns, shared game state, and action costs before
-  presenting action buttons. Render game-provided text as escaped text.
-- Present committed results separately from current state. Preserve the
-  original form data when offering a retry for an uncertain outcome.
+  presenting action buttons. Optional `Form.Cost` renders a Cost line; games
+  keep it aligned with the action's real Turn spend. Render game-provided text
+  as escaped text.
+- Present committed results separately from current state, with a
+  `Succeeded.` / `Rejected.` status prefix. Preserve the original form data
+  when offering a retry for an uncertain outcome.
